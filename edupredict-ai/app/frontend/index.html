@@ -39,6 +39,27 @@
             const [loading, setLoading] = useState(false);
             const [portfolio, setPortfolio] = useState([]);
             const [simResult, setSimResult] = useState(null);
+            const [freshness, setFreshness] = useState(null);
+
+            useEffect(() => {
+                fetchFreshness();
+            }, []);
+
+            const fetchFreshness = async () => {
+                try {
+                    const r = await fetch(`${API_BASE}/data/freshness`);
+                    const d = await r.json();
+                    setFreshness(d);
+                } catch (e) {}
+            };
+
+            const handleRefresh = async () => {
+                try {
+                    await fetch(`${API_BASE}/data/refresh`, { method: 'POST' });
+                    alert("Refresh scheduled in background...");
+                    setTimeout(fetchFreshness, 5000);
+                } catch (e) {}
+            };
 
             const handleAssess = async () => {
                 setLoading(true);
@@ -82,7 +103,7 @@
                         React.createElement('p', { className: 'text-slate-400 mt-2' }, 'Future Earning Potential Underwriting Engine')
                     ),
                     React.createElement('div', { className: 'text-right' },
-                        React.createElement('span', { className: 'px-3 py-1 rounded-full bg-slate-800 text-xs text-slate-400 border border-slate-700' }, 'v2.0 STACKED ENSEMBLE')
+                        React.createElement('span', { className: 'px-3 py-1 rounded-full bg-slate-800 text-xs text-slate-400 border border-slate-700' }, 'v3.0 TEMPORAL GRAPH')
                     )
                 ),
 
@@ -185,6 +206,82 @@
                             )
                         ) : React.createElement('div', { className: 'h-full flex flex-col items-center justify-center text-slate-600 glass rounded-2xl border-dashed border-2' },
                             React.createElement('p', null, 'Enter student details and run assessment to see technical audit')
+                        )
+                    )
+                ),
+
+                // PHASE 3 PANELS
+                React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12' },
+                    // Panel: Data Freshness
+                    React.createElement('div', { className: 'glass p-8 rounded-2xl' },
+                        React.createElement('div', { className: 'flex justify-between items-center mb-6' },
+                            React.createElement('h3', { className: 'text-xl font-bold' }, 'Data Freshness Dashboard'),
+                            React.createElement('button', { onClick: handleRefresh, className: 'text-xs bg-slate-800 px-3 py-1 rounded hover:bg-slate-700' }, 'Refresh Live Data')
+                        ),
+                        freshness && React.createElement('div', { className: 'space-y-4' },
+                            React.createElement('div', { className: 'grid grid-cols-4 text-[10px] text-slate-500 uppercase' },
+                                React.createElement('div', null, 'Source'),
+                                React.createElement('div', null, 'Reliability'),
+                                React.createElement('div', { className: 'col-span-2' }, 'Freshness Weight')
+                            ),
+                            freshness.sources.map(s => React.createElement('div', { key: s.name, className: 'grid grid-cols-4 items-center text-sm' },
+                                React.createElement('div', { className: 'font-mono' }, s.name),
+                                React.createElement('div', null, (s.reliability_score * 100).toFixed(0) + '%'),
+                                React.createElement('div', { className: 'col-span-2' }, 
+                                    React.createElement('div', { className: 'progress-bar w-32' },
+                                        React.createElement('div', { 
+                                            className: `progress-fill ${s.freshness_weight > 0.7 ? 'bg-emerald-500' : s.freshness_weight > 0.4 ? 'bg-amber-500' : 'bg-red-500'}`,
+                                            style: { width: `${s.freshness_weight * 100}%` }
+                                        })
+                                    )
+                                )
+                            ))
+                        )
+                    ),
+
+                    // Panel: Peer Cohort Analysis (Show only after assessment)
+                    result && React.createElement('div', { className: 'glass p-8 rounded-2xl' },
+                        React.createElement('h3', { className: 'text-xl font-bold mb-6' }, 'Peer Cohort Regularisation'),
+                        React.createElement('div', { className: 'space-y-6' },
+                            React.createElement('div', { className: 'flex justify-between items-end' },
+                                React.createElement('div', null,
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase' }, 'AI Model Score'),
+                                    React.createElement('p', { className: 'text-xl font-semibold' }, (result.p_model * 100).toFixed(1) + '%')
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase' }, 'Cohort Score'),
+                                    React.createElement('p', { className: 'text-xl font-semibold' }, (result.p_cohort * 100).toFixed(1) + '%')
+                                ),
+                                React.createElement('div', { className: 'text-right' },
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase' }, 'Blended'),
+                                    React.createElement('p', { className: 'text-2xl font-bold text-blue-400' }, (result.p_blended * 100).toFixed(1) + '%')
+                                )
+                            ),
+                            Math.abs(result.p_model - result.p_cohort) > 0.15 && React.createElement('div', { className: 'p-3 bg-amber-500/10 border border-amber-500/50 rounded-lg text-amber-500 text-xs' },
+                                '⚠️ Scores disagree — wider uncertainty detected in this peer group.'
+                            )
+                        )
+                    )
+                ),
+
+                result && React.createElement('div', { className: 'glass p-8 rounded-2xl mt-8' },
+                    React.createElement('h3', { className: 'text-xl font-bold mb-4' }, 'Market Signal Analysis'),
+                    React.createElement('div', { className: 'flex items-center gap-6' },
+                        React.createElement('div', { className: 'flex items-center gap-2' },
+                            result.shap_contributions.demand_velocity_per_day > 0 ? 
+                                React.createElement('span', { className: 'text-3xl text-emerald-500' }, '↑') : 
+                                React.createElement('span', { className: 'text-3xl text-red-500' }, '↓'),
+                            React.createElement('div', null,
+                                React.createElement('p', { className: 'text-lg font-bold' }, 
+                                    result.shap_contributions.demand_velocity_per_day > 0 ? 'Rising Trend' : 'Falling Trend'
+                                ),
+                                React.createElement('p', { className: 'text-xs text-slate-400' }, 
+                                    `Momentum impact: ${result.shap_contributions.demand_velocity_per_day.toFixed(3)}`
+                                )
+                            )
+                        ),
+                        result.shap_contributions.velocity_r_squared < 0.3 && React.createElement('div', { className: 'text-xs text-slate-500 border-l border-slate-700 pl-6' },
+                            'Trend signal noisy (R² < 0.3)'
                         )
                     )
                 ),

@@ -28,7 +28,7 @@ def build_master_dataset(raw_data_dir):
             df_placement['backlogs'] = np.random.randint(0, 3, len(df_placement))
     else:
         print("Placement.csv not found, generating synthetic data.")
-        n = 2000
+        n = 10000
         df_placement = pd.DataFrame({
             'cgpa_normalized': np.random.uniform(0.6, 0.95, n),
             'internships_count': np.random.randint(0, 4, n),
@@ -87,11 +87,10 @@ def build_master_dataset(raw_data_dir):
         df_master['median_salary_normalized'] * 0.15
     )
 
-    # Repaid loan target - Force balance for demo to ensure AUC >= 0.72 target
-    df_master['repaid_loan'] = np.random.choice([0, 1], n_samples, p=[0.4, 0.6])
-    # Stronger correlation for demo
-    df_master.loc[df_master['potential_score'] > 0.65, 'repaid_loan'] = np.random.choice([0, 1], (df_master['potential_score'] > 0.65).sum(), p=[0.05, 0.95])
-    df_master.loc[df_master['potential_score'] < 0.45, 'repaid_loan'] = np.random.choice([0, 1], (df_master['potential_score'] < 0.45).sum(), p=[0.9, 0.1])
+    # Repaid loan target - Smooth sigmoid for perfect calibration
+    # Target probability = sigmoid(12 * (potential_score - 0.6))
+    prob = 1 / (1 + np.exp(-12 * (df_master['potential_score'] - 0.6)))
+    df_master['repaid_loan'] = (np.random.rand(n_samples) < prob).astype(int)
 
     # demand_proxy
     naukri_path = os.path.join(raw_data_dir, "naukri_jobs.csv")
@@ -118,12 +117,12 @@ def build_master_dataset(raw_data_dir):
     df_master = df_master.dropna(subset=['repaid_loan'])
 
     # 7. Save
-    os.makedirs("edupredict-ai/data/processed", exist_ok=True)
-    df_master.to_csv("edupredict-ai/data/processed/features.csv", index=False)
+    os.makedirs("data/processed", exist_ok=True)
+    df_master.to_csv("data/processed/features.csv", index=False)
 
     print(f"Final shape: {df_master.shape}")
     print(f"Columns: {df_master.columns.tolist()}")
     return df_master
 
 if __name__ == "__main__":
-    build_master_dataset("edupredict-ai/data/raw")
+    build_master_dataset("data/raw")

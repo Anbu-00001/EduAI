@@ -5,34 +5,35 @@ import os, json
 
 def platt_scale(ensemble_probs_train: np.ndarray, 
                 y_train: np.ndarray,
-                ensemble_probs_test: np.ndarray) -> tuple[np.ndarray, dict]:
+                ensemble_probs_test: np.ndarray,
+                method: str = "isotonic") -> tuple[np.ndarray, dict]:
     """
-    Platt scaling: fit a logistic sigmoid f(s) = 1/(1 + exp(A*s + B))
-    
-    Math: minimizes cross-entropy loss L = -Σ[y_i * log(p_i) + (1-y_i) * log(1-p_i)]
-    over parameters A, B applied to raw ensemble score s.
+    Calibrate probabilities using either Platt Scaling or Isotonic Regression.
     """
-    from scipy.optimize import minimize
-    
-    def neg_log_likelihood(params, scores, labels):
-        A, B = params
-        p = 1 / (1 + np.exp(A * scores + B))
-        p = np.clip(p, 1e-10, 1 - 1e-10)
-        return -np.sum(labels * np.log(p) + (1 - labels) * np.log(1 - p))
-    
-    result = minimize(
-        neg_log_likelihood,
-        x0=[1.0, 0.0],
-        args=(ensemble_probs_train, y_train),
-        method="L-BFGS-B"
-    )
-    A_opt, B_opt = result.x
-    
-    calibrated_probs = 1 / (1 + np.exp(A_opt * ensemble_probs_test + B_opt))
-    
-    calibration_params = {"A": float(A_opt), "B": float(B_opt)}
-    
-    return calibrated_probs, calibration_params
+    if method == "isotonic":
+        # use IsotonicRegression
+        from sklearn.isotonic import IsotonicRegression
+        ir = IsotonicRegression(out_of_bounds='clip')
+        ir.fit(ensemble_probs_train, y_train)
+        calibrated_probs = ir.predict(ensemble_probs_test)
+        # For saving, we'll store the model or a simplified version
+        # Since we can't easily JSON serialize IsotonicRegression, we'll use a lookup table
+        bins = np.linspace(0, 1, 101)
+        lookup = ir.predict(bins)
+        return calibrated_probs, {"method": "isotonic", "bins": bins.tolist(), "lookup": lookup.tolist()}
+    else:
+        # Platt Scaling
+        from scipy.optimize import minimize
+        def neg_log_likelihood(params, scores, labels):
+            A, B = params
+            p = 1 / (1 + np.exp(A * scores + B))
+            p = np.clip(p, 1e-10, 1 - 1e-10)
+            return -np.sum(labels * np.log(p) + (1 - labels) * np.log(1 - p))
+        
+        result = minimize(neg_log_likelihood, x0=[-1.0, 0.0], args=(ensemble_probs_train, y_train))
+        A_opt, B_opt = result.x
+        calibrated_probs = 1 / (1 + np.exp(A_opt * ensemble_probs_test + B_opt))
+        return calibrated_probs, {"method": "platt", "A": float(A_opt), "B": float(B_opt)}
 
 def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
     """

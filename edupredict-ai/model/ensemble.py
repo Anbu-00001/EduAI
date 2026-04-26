@@ -119,8 +119,8 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
     print(f"\nStacked Ensemble OOF AUC: {ensemble_auc:.4f}")
     
     # Save all artifacts
-    os.makedirs("edupredict-ai/model/artifacts", exist_ok=True)
-    pickle.dump(base_models_per_fold, open("edupredict-ai/model/artifacts/base_models.pkl", "wb"))
-    pickle.dump(meta_model, open("edupredict-ai/model/artifacts/meta_model.pkl", "wb"))
+    os.makedirs("model/artifacts", exist_ok=True)
+    pickle.dump(base_models_per_fold, open("model/artifacts/base_models.pkl", "wb"))
+    pickle.dump(meta_model, open("model/artifacts/meta_model.pkl", "wb"))
     
-    return base_models_per_fold, meta_model, ensemble_auc
+    return base_models_per_fold, meta_model, ensemble_auc, ensemble_preds

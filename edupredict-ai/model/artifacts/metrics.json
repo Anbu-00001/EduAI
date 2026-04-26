@@ -1,13 +1,9 @@
 {
-  "stacked_ensemble_auc": 0.828,
-  "baseline_auc_cibil_only": 0.62,
-  "auc_improvement": 0.208,
-  "pre_calibration_ece": 0.146,
-  "post_calibration_ece": 0.0516,
-  "conformal_q_hat": 0.35830536284093256,
-  "empirical_coverage_90pct": 0.85,
-  "conformal_avg_interval_width": 0.45418702911017356,
-  "fairness_dpi": 1.0,
-  "fairness_overall": true,
-  "model_version": "v2.0-stacked-ensemble"
+  "stacked_ensemble_auc": 0.8018,
+  "graph_regularised_auc": 0.7866,
+  "auc_improvement": 0.1666,
+  "post_calibration_ece": 0.0312,
+  "conformal_coverage_90pct": 0.909,
+  "n_features_v3": 12,
+  "model_version": "v3.0-temporal-graph"
 }
