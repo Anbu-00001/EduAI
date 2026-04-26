@@ -9,3 +9,4 @@ edupredict-ai/model/artifacts/shap_*.png
 merged_cols.txt
 check_output.txt
 .kaggle/
+catboost_info/
