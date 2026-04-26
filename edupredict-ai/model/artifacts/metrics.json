@@ -1,0 +1,17 @@
+{
+  "test_auc": 0.8219,
+  "cv_auc_mean": 0.8034,
+  "cv_auc_std": 0.0338,
+  "train_size": 800,
+  "test_size": 200,
+  "feature_cols": [
+    "cgpa_normalized",
+    "internships_count",
+    "backlogs",
+    "median_salary_normalized",
+    "potential_score",
+    "demand_proxy",
+    "placement_rate_for_field"
+  ],
+  "baseline_auc_cibil_only": 0.62
+}
