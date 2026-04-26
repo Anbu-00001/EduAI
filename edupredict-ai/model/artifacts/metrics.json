@@ -1,17 +1,13 @@
 {
-  "test_auc": 0.8219,
-  "cv_auc_mean": 0.8034,
-  "cv_auc_std": 0.0338,
-  "train_size": 800,
-  "test_size": 200,
-  "feature_cols": [
-    "cgpa_normalized",
-    "internships_count",
-    "backlogs",
-    "median_salary_normalized",
-    "potential_score",
-    "demand_proxy",
-    "placement_rate_for_field"
-  ],
-  "baseline_auc_cibil_only": 0.62
+  "stacked_ensemble_auc": 0.828,
+  "baseline_auc_cibil_only": 0.62,
+  "auc_improvement": 0.208,
+  "pre_calibration_ece": 0.146,
+  "post_calibration_ece": 0.0516,
+  "conformal_q_hat": 0.35830536284093256,
+  "empirical_coverage_90pct": 0.85,
+  "conformal_avg_interval_width": 0.45418702911017356,
+  "fairness_dpi": 1.0,
+  "fairness_overall": true,
+  "model_version": "v2.0-stacked-ensemble"
 }
