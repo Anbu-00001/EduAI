@@ -1,0 +1,12 @@
+{
+  "stacked_ensemble_auc": 0.7937,
+  "graph_regularised_auc": 0.7924,
+  "auc_improvement": 0.1724,
+  "baseline_cibil_auc": 0.62,
+  "pre_calibration_ece": 0.041,
+  "post_calibration_ece": 0.0399,
+  "conformal_q_hat": 0.6817,
+  "train_size": 7500,
+  "n_features_v4": 13,
+  "model_version": "v4.0-production"
+}

@@ -1,0 +1,7 @@
+{
+  "q_hat": 0.681704260651629,
+  "theoretical_coverage": 0.9,
+  "empirical_coverage": 0.8816,
+  "avg_interval_width": 0.9048998693069873,
+  "coverage_satisfied": false
+}

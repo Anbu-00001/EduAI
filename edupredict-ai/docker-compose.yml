@@ -7,11 +7,15 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://edupredict:edupredict@db:5432/edupredict
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=production_secret_change_me_1234567890
     volumes:
       - .:/app
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
 
   db:
     image: postgres:15-alpine
@@ -30,5 +34,33 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=edupredict
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+
 volumes:
   pgdata:
+  grafana_data:

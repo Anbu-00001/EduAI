@@ -72,28 +72,42 @@ def compute_fairness_metrics(
     
     return FairnessReport(dpi, tpr_diff, fpr_diff, ppv_diff, overall_fair)
 
-def apply_fairness_constraint(
-        y_pred_proba: np.ndarray,
-        sensitive_attr: np.ndarray,
-        target_dpi: float = 0.80
-) -> np.ndarray:
-    """Post-processing fairness correction via threshold adjustment."""
+def audit_fairness(df: pd.DataFrame, y_pred_proba: np.ndarray, sensitive_col: str) -> dict:
+    """
+    Perform a complete fairness audit across a sensitive column.
+    Handles multiple groups by comparing each to the mean.
+    """
+    y_true = df["repaid_loan"].values
+    sensitive_attr = df[sensitive_col].values
+    
+    # Calculate group-level metrics
     groups = np.unique(sensitive_attr)
-    if len(groups) != 2: return (y_pred_proba >= 0.5).astype(float)
-    g0, g1 = groups[0], groups[1]
+    group_stats = {}
+    for g in groups:
+        mask = sensitive_attr == g
+        if mask.sum() == 0: continue
+        approval_rate = (y_pred_proba[mask] >= 0.5).mean()
+        tpr = (y_pred_proba[mask & (y_true == 1)] >= 0.5).mean() if (mask & (y_true == 1)).sum() > 0 else 0.0
+        fpr = (y_pred_proba[mask & (y_true == 0)] >= 0.5).mean() if (mask & (y_true == 0)).sum() > 0 else 0.0
+        ppv = y_true[mask & (y_pred_proba >= 0.5)].mean() if (mask & (y_pred_proba >= 0.5)).sum() > 0 else 0.0
+        group_stats[str(g)] = {"approval": approval_rate, "tpr": tpr, "fpr": fpr, "ppv": ppv}
     
-    probs_g0 = y_pred_proba[sensitive_attr == g0]
-    probs_g1 = y_pred_proba[sensitive_attr == g1]
+    # Demographic Parity Index (ratio of min approval / max approval)
+    approvals = [s["approval"] for s in group_stats.values()]
+    dpi = min(approvals) / max(approvals) if max(approvals) > 0 else 1.0
     
-    tau_majority = 0.50
-    approval_majority = (probs_g1 >= tau_majority).mean()
+    # Differences (max absolute difference between any two groups)
+    tpr_diff = max([s["tpr"] for s in group_stats.values()]) - min([s["tpr"] for s in group_stats.values()])
+    fpr_diff = max([s["fpr"] for s in group_stats.values()]) - min([s["fpr"] for s in group_stats.values()])
+    ppv_diff = max([s["ppv"] for s in group_stats.values()]) - min([s["ppv"] for s in group_stats.values()])
     
-    target_approval_minority = approval_majority * target_dpi
-    tau_minority = float(np.quantile(probs_g0, 1 - target_approval_minority))
-    
-    adjusted = np.where(
-        sensitive_attr == g0,
-        (y_pred_proba >= tau_minority).astype(float),
-        (y_pred_proba >= tau_majority).astype(float)
-    )
-    return adjusted
+    report = {
+        "demographic_parity_index": float(dpi),
+        "equalized_odds_tpr_diff": float(tpr_diff),
+        "equalized_odds_fpr_diff": float(fpr_diff),
+        "predictive_parity_diff": float(ppv_diff),
+        "group_metrics": group_stats,
+        "overall_fair": bool(dpi >= 0.80 and tpr_diff <= 0.10 and fpr_diff <= 0.10)
+    }
+    return report
+

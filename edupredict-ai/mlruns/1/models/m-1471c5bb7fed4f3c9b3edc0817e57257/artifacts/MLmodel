@@ -1,0 +1,22 @@
+artifact_path: /home/anbu/25_class/Sem_4/EduAI/edupredict-ai/mlruns/1/models/m-1471c5bb7fed4f3c9b3edc0817e57257/artifacts
+flavors:
+  python_function:
+    data: model.ubj
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.12.3
+  xgboost:
+    code: null
+    data: model.ubj
+    model_class: xgboost.sklearn.XGBClassifier
+    model_format: ubj
+    xgb_version: 3.2.0
+mlflow_version: 3.11.1
+model_id: m-1471c5bb7fed4f3c9b3edc0817e57257
+model_size_bytes: 135685
+model_uuid: m-1471c5bb7fed4f3c9b3edc0817e57257
+prompts: null
+run_id: a7334110b0be41a29dade36c6d895383
+utc_time_created: '2026-04-27 12:18:26.336006'

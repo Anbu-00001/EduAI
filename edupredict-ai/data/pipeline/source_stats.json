@@ -1,1 +1,1 @@
-{"naukri": {"successes": 0, "failures": 84}, "linkedin": {"successes": 0, "failures": 84}, "indeed": {"successes": 84, "failures": 0}, "datagov": {"successes": 79, "failures": 5}}
+{"naukri": {"successes": 0, "failures": 105}, "linkedin": {"successes": 0, "failures": 105}, "indeed": {"successes": 105, "failures": 0}, "datagov": {"successes": 84, "failures": 21}}

@@ -98,3 +98,11 @@ uvicorn==0.46.0
 watchdog==6.0.0
 webencodings==0.5.1
 xgboost==3.2.0
+mlflow
+redis
+prometheus-fastapi-instrumentator
+apscheduler
+evidently
+python-jose[cryptography]
+passlib[bcrypt]
+sentence-transformers

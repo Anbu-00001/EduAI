@@ -1,0 +1,171 @@
+{
+  "model_details": {
+    "name": "EduPredict AI Student Loan Underwriting Model",
+    "version": "v4.0-production",
+    "type": "Stacked ensemble (XGBoost + LightGBM + CatBoost) + Logistic meta-learner",
+    "task": "Binary classification \u2014 student loan repayment prediction",
+    "date_trained": "2026-04-27T06:19:52.311938",
+    "license": "MIT",
+    "contact": "dpo@edupredict.ai"
+  },
+  "intended_use": {
+    "primary_use": "Advisory risk scoring for Indian student education loan applications",
+    "primary_users": "NBFC loan officers, DSA partners",
+    "out_of_scope": [
+      "Sole basis for credit denial without human review",
+      "Non-education loans",
+      "Students outside India",
+      "Any use without explicit DPDP Act consent"
+    ]
+  },
+  "training_data": {
+    "sources": [
+      "Kaggle: Student Placement Dataset (CGPA, internships, placement)",
+      "Kaggle: Lending Club Loan Data (repayment outcomes as proxy)",
+      "Kaggle: US College Scorecard (salary by field)",
+      "Live: Naukri job API (demand by field)",
+      "Live: data.gov.in PLFS (employment statistics)"
+    ],
+    "known_limitations": [
+      "Lending Club data is US consumer loans \u2014 not Indian student loans",
+      "Salary data from US Scorecard \u2014 adjusted for India PPP",
+      "No real Indian student loan repayment outcome data in training set"
+    ],
+    "n_training_samples": 7500
+  },
+  "performance": {
+    "primary_metric": "ROC-AUC (graph-regularised)",
+    "auc": 0.7924,
+    "baseline_auc_cibil_only": 0.62,
+    "auc_improvement": 0.1724,
+    "calibration_ece": 0.0399,
+    "calibration_method": "isotonic",
+    "conformal_coverage_90pct": 0.8816,
+    "conformal_q_hat": 0.681704260651629
+  },
+  "fairness": {
+    "sensitive_attribute": "Field of study (proxy for socioeconomic background)",
+    "metrics": {
+      "demographic_parity_index": 0.964808362369338,
+      "equalized_odds_tpr_diff": 0.06565075272777499,
+      "equalized_odds_fpr_diff": 0.05390181550327139,
+      "predictive_parity_diff": 0.07595818815331012
+    },
+    "overall_fair": true,
+    "fairness_standard": "80% rule (ECOA / RBI FREE-AI Framework)",
+    "note": "Chouldechova (2017) impossibility theorem: equalized odds and predictive parity cannot both hold when base rates differ. We report both and let the operator choose based on policy."
+  },
+  "architecture": {
+    "base_learners": [
+      "XGBoost (Dart)",
+      "LightGBM (Dart)",
+      "CatBoost (Ordered)"
+    ],
+    "meta_learner": "Logistic Regression on OOF predictions",
+    "calibration": "isotonic",
+    "graph_regularisation": {
+      "method": "RBF kernel k-NN (k=50)",
+      "alpha": 0.0,
+      "sigma": "Median heuristic"
+    },
+    "uncertainty": "Split conformal prediction (Angelopoulos & Bates 2021)"
+  },
+  "features": {
+    "cgpa_normalized": {
+      "range": [
+        0.600110883012156,
+        0.9499804511374896
+      ],
+      "description": "CGPA normalised to [0,1] by dividing by 10"
+    },
+    "internships_count": {
+      "range": [
+        0.0,
+        3.0
+      ],
+      "description": "Number of internships completed"
+    },
+    "backlogs": {
+      "range": [
+        0.0,
+        2.0
+      ],
+      "description": "Number of academic backlogs/arrears"
+    },
+    "median_salary_normalized": {
+      "range": [
+        0.1386043529895699,
+        0.8979147668003931
+      ],
+      "description": "Median salary for field, normalised to [0,1]"
+    },
+    "potential_score": {
+      "range": [
+        0.3725044127047559,
+        0.913955634634475
+      ],
+      "description": "Weighted composite: 0.35*CGPA + 0.25*internships + 0.25*placement + 0.15*salary"
+    },
+    "demand_proxy": {
+      "range": [
+        0.1386043529895699,
+        0.8979147668003931
+      ],
+      "description": "Normalised job posting count for student's field"
+    },
+    "placement_rate_for_field": {
+      "range": [
+        0.4000157046306996,
+        0.949999079926156
+      ],
+      "description": "Institution placement rate [0,1]"
+    },
+    "demand_velocity_per_day": {
+      "range": [
+        -44933.02419354872,
+        35238.342564576684
+      ],
+      "description": "OLS slope of job count over time (jobs/day)"
+    },
+    "demand_acceleration": {
+      "range": [
+        -713695.514017163,
+        839502.3052183962
+      ],
+      "description": "Second derivative of job demand (jobs/day\u00b2)"
+    },
+    "velocity_r_squared": {
+      "range": [
+        -13.655209117730973,
+        -3.51567112496018
+      ],
+      "description": "OLS fit quality for demand trend (0=noisy, 1=clean)"
+    },
+    "demand_momentum": {
+      "range": [
+        0.13009035414560646,
+        0.9278781922460342
+      ],
+      "description": "EWMA: 0.3*velocity + 0.7*demand_proxy"
+    },
+    "market_hhi": {
+      "range": [
+        0.17299816736228768,
+        0.17299816736228768
+      ],
+      "description": "Herfindahl-Hirschman Index of field concentration"
+    },
+    "macro_index": {
+      "range": [
+        0.47469956018459236,
+        0.47469956018459236
+      ],
+      "description": "India Macro Repayment Index: composite of unemployment, repo rate, CPI, hiring"
+    }
+  },
+  "regulatory_compliance": {
+    "rbi_free_ai": "August 2025 \u2014 Explainability via SHAP, Fairness via DPI",
+    "dpdp_act_2023": "Consent capture implemented, data retention policies defined",
+    "adverse_action": "Reason codes AA-01 through AA-09 generated for RED tier"
+  }
+}

@@ -3,18 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EduPredict AI — Lender Command Center</title>
+    <title>EduPredict AI — Production Risk Control</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Outfit', sans-serif; background-color: #0f172a; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
-        .risk-green { color: #10b981; }
-        .risk-amber { color: #f59e0b; }
-        .risk-red { color: #ef4444; }
-        input, select { background: #1e293b !important; color: white !important; border: 1px solid #334155 !important; }
-        .progress-bar { height: 8px; border-radius: 4px; background: #334155; overflow: hidden; position: relative; }
-        .progress-fill { height: 100%; transition: width 0.5s ease-in-out; }
+        :root {
+            --bg: #030712;
+            --card: #0f172a;
+            --accent: #3b82f6;
+            --emerald: #10b981;
+            --amber: #f59e0b;
+            --rose: #f43f5e;
+        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg); color: #f8fafc; }
+        .glass { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.05); }
+        .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.15); }
+        .input-focus:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+        input, select { background: #1e293b !important; color: white !important; border: 1px solid #334155 !important; transition: all 0.2s; }
+        .risk-tier-green { border-left: 4px solid var(--emerald); }
+        .risk-tier-amber { border-left: 4px solid var(--amber); }
+        .risk-tier-red { border-left: 4px solid var(--rose); }
+        .animate-in { animation: slideIn 0.4s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -25,6 +35,7 @@
         import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
 
         const API_BASE = "/v1";
+        const API_KEY = "ep_demo_dashboard_key_2026"; // Initialised in main.py lifespan
 
         const App = () => {
             const [profile, setProfile] = useState({
@@ -33,189 +44,212 @@
                 backlogs: 0,
                 field_of_study: "computer_science",
                 college_placement_rate: 85,
-                loan_amount_inr: 500000
+                loan_amount_inr: 500000,
+                user_hash: "dashboard_demo_user",
+                has_consent: true
             });
             const [result, setResult] = useState(null);
             const [loading, setLoading] = useState(false);
-            const [portfolio, setPortfolio] = useState([]);
-            const [simResult, setSimResult] = useState(null);
+            const [error, setError] = useState(null);
 
             const handleAssess = async () => {
                 setLoading(true);
+                setError(null);
                 try {
+                    // Phase 4: DPDP Act Compliance Flow
+                    if (!profile.has_consent) {
+                        throw new Error("DPDP Act Compliance: Explicit consent required for processing.");
+                    }
+
+                    // 1. Record Consent (Production Requirement)
+                    const consentResp = await fetch(`${API_BASE}/consent`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-API-Key': API_KEY
+                        },
+                        body: JSON.stringify({
+                            user_hash: profile.user_hash,
+                            consent_given: true,
+                            data_sources: ["Academic Records", "Job Market Data", "Gov Stats", "Peer Cohort"]
+                        })
+                    });
+                    
+                    if (!consentResp.ok) throw new Error("Failed to record DPDP consent");
+
+                    // 2. Perform Assessment
                     const response = await fetch(`${API_BASE}/assess`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-API-Key': API_KEY
+                        },
                         body: JSON.stringify(profile)
                     });
+                    
                     const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.detail || "Assessment failed");
+                    }
                     setResult(data);
                 } catch (e) {
-                    alert("API Connection Error. Ensure backend is running.");
+                    setError(e.message);
                 }
                 setLoading(false);
             };
 
-            const addToPortfolio = () => {
-                if (result) {
-                    setPortfolio([...portfolio, { ...profile, ...result }]);
-                }
+
+            const getRiskColor = (tier) => {
+                if (tier === 'GREEN') return 'text-emerald-400';
+                if (tier === 'AMBER') return 'text-amber-400';
+                return 'text-rose-400';
             };
 
-            const runSimulation = async () => {
-                if (portfolio.length === 0) return;
-                try {
-                    const response = await fetch(`${API_BASE}/portfolio/simulate`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(portfolio)
-                    });
-                    const data = await response.json();
-                    setSimResult(data);
-                } catch (e) { alert("Sim failed"); }
+            const getRiskBg = (tier) => {
+                if (tier === 'GREEN') return 'bg-emerald-500/10 border-emerald-500/20';
+                if (tier === 'AMBER') return 'bg-amber-500/10 border-amber-500/20';
+                return 'bg-rose-500/10 border-rose-500/20';
             };
 
-            return React.createElement('div', { className: 'min-h-screen p-8' },
-                React.createElement('header', { className: 'mb-12 flex justify-between items-end' },
+            return React.createElement('div', { className: 'max-w-7xl mx-auto p-4 md:p-8' },
+                React.createElement('nav', { className: 'flex justify-between items-center mb-12' },
                     React.createElement('div', null,
-                        React.createElement('h1', { className: 'text-4xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent' }, 'EduPredict AI'),
-                        React.createElement('p', { className: 'text-slate-400 mt-2' }, 'Future Earning Potential Underwriting Engine')
+                        React.createElement('h1', { className: 'text-2xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent' }, 'EduPredict AI'),
+                        React.createElement('div', { className: 'flex items-center gap-2 mt-1' },
+                            React.createElement('span', { className: 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse' }),
+                            React.createElement('p', { className: 'text-[10px] uppercase tracking-widest text-slate-500 font-semibold' }, 'Production Risk Engine v4.0.0')
+                        )
                     ),
-                    React.createElement('div', { className: 'text-right' },
-                        React.createElement('span', { className: 'px-3 py-1 rounded-full bg-slate-800 text-xs text-slate-400 border border-slate-700' }, 'v2.0 STACKED ENSEMBLE')
+                    React.createElement('div', { className: 'flex items-center gap-4' },
+                        React.createElement('div', { className: 'text-right hidden md:block' },
+                            React.createElement('p', { className: 'text-[10px] text-slate-500 uppercase' }, 'API Status'),
+                            React.createElement('p', { className: 'text-xs font-mono text-emerald-400' }, 'AUTHENTICATED')
+                        )
                     )
                 ),
 
                 React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-8' },
-                    // PANEL 1: Input
-                    React.createElement('div', { className: 'lg:col-span-4 space-y-6' },
-                        React.createElement('div', { className: 'glass p-6 rounded-2xl' },
-                            React.createElement('h2', { className: 'text-xl font-semibold mb-6' }, 'Student Profile'),
+                    // INPUT PANEL
+                    React.createElement('div', { className: 'lg:col-span-4' },
+                        React.createElement('div', { className: 'glass p-6 rounded-3xl glow-blue' },
+                            React.createElement('h2', { className: 'text-lg font-semibold mb-6 flex items-center gap-2' }, 
+                                React.createElement('span', { className: 'text-blue-400' }, '◈'), 'Applicant Profile'
+                            ),
                             React.createElement('div', { className: 'space-y-4' },
                                 ['cgpa', 'internships_count', 'backlogs', 'college_placement_rate', 'loan_amount_inr'].map(key => 
                                     React.createElement('div', { key },
-                                        React.createElement('label', { className: 'block text-xs text-slate-400 uppercase mb-1' }, key.replace(/_/g, ' ')),
+                                        React.createElement('label', { className: 'block text-[10px] text-slate-500 uppercase font-bold mb-1 ml-1' }, key.replace(/_/g, ' ')),
                                         React.createElement('input', {
                                             type: 'number',
-                                            className: 'w-full p-2 rounded-lg',
+                                            className: 'w-full p-2.5 rounded-xl input-focus',
                                             value: profile[key],
                                             onChange: (e) => setProfile({...profile, [key]: parseFloat(e.target.value)})
                                         })
                                     )
                                 ),
                                 React.createElement('div', null,
-                                    React.createElement('label', { className: 'block text-xs text-slate-400 uppercase mb-1' }, 'Field of Study'),
+                                    React.createElement('label', { className: 'block text-[10px] text-slate-500 uppercase font-bold mb-1 ml-1' }, 'Major / Field'),
                                     React.createElement('select', {
-                                        className: 'w-full p-2 rounded-lg',
+                                        className: 'w-full p-2.5 rounded-xl input-focus',
                                         value: profile.field_of_study,
                                         onChange: (e) => setProfile({...profile, field_of_study: e.target.value})
                                     }, 
                                         ["computer_science", "data_science", "mba_finance", "mechanical_engineering", "electrical_engineering", "civil_engineering", "biotechnology"]
                                         .map(f => React.createElement('option', { key: f, value: f }, f.replace(/_/g, ' ').toUpperCase()))
                                     )
+                                ),
+                                // DPDP Consent Checkbox
+                                React.createElement('div', { className: 'pt-4 border-t border-slate-800' },
+                                    React.createElement('label', { className: 'flex items-start gap-3 cursor-pointer group' },
+                                        React.createElement('input', {
+                                            type: 'checkbox',
+                                            className: 'mt-1 w-4 h-4 rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500/20',
+                                            checked: profile.has_consent,
+                                            onChange: (e) => setProfile({...profile, has_consent: e.target.checked})
+                                        }),
+                                        React.createElement('span', { className: 'text-[11px] text-slate-400 group-hover:text-slate-300 transition-colors' }, 
+                                            'Applicant has provided explicit consent for data processing under DPDP Act 2023 guidelines.'
+                                        )
+                                    )
                                 )
                             ),
                             React.createElement('button', {
                                 onClick: handleAssess,
-                                className: 'w-full mt-8 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-semibold transition-all',
+                                className: `w-full mt-8 py-4 rounded-2xl font-bold transition-all shadow-xl ${loading ? 'bg-slate-800' : 'bg-blue-600 hover:bg-blue-500 active:scale-[0.98]'}`,
                                 disabled: loading
-                            }, loading ? 'ANALYZING...' : 'RUN ASSESSMENT')
+                            }, loading ? 'PROCESSING AUDIT...' : 'VALIDATE & ASSESS')
+                        ),
+                        error && React.createElement('div', { className: 'mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-xs flex gap-3' },
+                            React.createElement('span', null, '⚠️'),
+                            React.createElement('p', null, error)
                         )
                     ),
 
-                    // PANEL 2 & 3: Results
-                    React.createElement('div', { className: 'lg:col-span-8 space-y-8' },
-                        result ? React.createElement(React.Fragment, null,
-                            React.createElement('div', { className: 'glass p-8 rounded-2xl relative overflow-hidden' },
-                                React.createElement('div', { className: `absolute top-0 right-0 w-2 h-full bg-${result.risk_tier.toLowerCase() === 'green' ? 'emerald' : result.risk_tier.toLowerCase() === 'amber' ? 'amber' : 'red'}-500` }),
+                    // RESULTS PANEL
+                    React.createElement('div', { className: 'lg:col-span-8 space-y-6' },
+                        result ? React.createElement('div', { className: 'animate-in' },
+                            // MAIN METRICS
+                            React.createElement('div', { className: `glass p-8 rounded-3xl mb-6 relative overflow-hidden ${getRiskBg(result.risk_tier)}` },
                                 React.createElement('div', { className: 'flex justify-between items-start mb-8' },
                                     React.createElement('div', null,
-                                        React.createElement('span', { className: `text-sm font-bold uppercase tracking-widest ${result.risk_tier === 'GREEN' ? 'risk-green' : result.risk_tier === 'AMBER' ? 'risk-amber' : 'risk-red'}` }, result.risk_tier),
-                                        React.createElement('h3', { className: 'text-3xl font-bold mt-1' }, (result.calibrated_probability * 100).toFixed(1) + '%'),
-                                        React.createElement('p', { className: 'text-slate-400' }, 'Calibrated Repayment Probability')
+                                        React.createElement('p', { className: `text-xs font-black tracking-widest uppercase mb-1 ${getRiskColor(result.risk_tier)}` }, `RISK TIER: ${result.risk_tier}`),
+                                        React.createElement('h3', { className: 'text-5xl font-bold' }, (result.calibrated_probability * 100).toFixed(1) + '%'),
+                                        React.createElement('p', { className: 'text-slate-400 mt-2 text-sm' }, 'Calibrated Repayment Probability')
                                     ),
                                     React.createElement('div', { className: 'text-right' },
-                                        React.createElement('p', { className: 'text-xs text-slate-500 uppercase' }, '90% Conformal Interval'),
-                                        React.createElement('p', { className: 'font-mono' }, `[${result.confidence_interval_90pct.lower.toFixed(2)}, ${result.confidence_interval_90pct.upper.toFixed(2)}]`)
+                                        React.createElement('div', { className: 'bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800 shadow-inner' },
+                                            React.createElement('p', { className: 'text-[10px] text-slate-500 uppercase font-bold' }, 'Conformal Uncertainty'),
+                                            React.createElement('p', { className: 'font-mono text-blue-400 font-bold' }, `±${((result.confidence_interval_90pct.upper - result.calibrated_probability) * 100).toFixed(1)}%`)
+                                        )
                                     )
                                 ),
-                                React.createElement('div', { className: 'mb-8' },
-                                    React.createElement('p', { className: 'text-lg text-slate-200' }, result.recommendation)
-                                ),
-                                React.createElement('div', null,
-                                    React.createElement('h4', { className: 'text-xs text-slate-500 uppercase mb-4' }, 'Feature Contributions (SHAP)'),
-                                    React.createElement('div', { className: 'space-y-2' },
-                                        Object.entries(result.shap_contributions).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1])).map(([name, val]) => 
-                                            React.createElement('div', { key: name, className: 'flex items-center gap-4' },
-                                                React.createElement('div', { className: 'w-32 text-xs truncate text-slate-400' }, name.replace('_normalized', '')),
-                                                React.createElement('div', { className: 'flex-1 h-2 rounded bg-slate-800' },
-                                                    React.createElement('div', {
-                                                        className: `h-full rounded ${val > 0 ? 'bg-emerald-500' : 'bg-red-500'}`,
-                                                        style: { width: `${Math.min(Math.abs(val) * 200, 100)}%`, marginLeft: val > 0 ? '0' : 'auto' }
-                                                    })
+                                React.createElement('div', { className: 'p-4 bg-white/5 rounded-2xl border border-white/5' },
+                                    React.createElement('p', { className: 'text-lg font-medium text-slate-200 leading-relaxed' }, result.recommendation)
+                                )
+                            ),
+
+                            // SHAP PANEL
+                            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-6' },
+                                React.createElement('div', { className: 'glass p-6 rounded-3xl' },
+                                    React.createElement('h4', { className: 'text-xs text-slate-500 uppercase font-bold mb-6 flex items-center gap-2' }, 
+                                        React.createElement('span', { className: 'w-1 h-1 rounded-full bg-blue-400' }), 'Technical Audit (SHAP)'
+                                    ),
+                                    React.createElement('div', { className: 'space-y-4' },
+                                        Object.entries(result.shap_contributions).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5).map(([name, val]) => 
+                                            React.createElement('div', { key: name },
+                                                React.createElement('div', { className: 'flex justify-between text-[10px] mb-1.5' },
+                                                    React.createElement('span', { className: 'text-slate-400 font-medium' }, name.replace('_normalized', '').toUpperCase()),
+                                                    React.createElement('span', { className: val > 0 ? 'text-emerald-400' : 'text-rose-400' }, (val > 0 ? '+' : '') + (val * 100).toFixed(1) + '%')
                                                 ),
-                                                React.createElement('div', { className: `text-[10px] font-mono w-12 text-right ${val > 0 ? 'text-emerald-400' : 'text-red-400'}` }, (val > 0 ? '+' : '') + val.toFixed(3))
+                                                React.createElement('div', { className: 'h-1.5 rounded-full bg-slate-800 overflow-hidden' },
+                                                    React.createElement('div', {
+                                                        className: `h-full rounded-full ${val > 0 ? 'bg-emerald-500' : 'bg-rose-500'}`,
+                                                        style: { width: `${Math.min(Math.abs(val) * 300, 100)}%`, marginLeft: val > 0 ? '0' : 'auto' }
+                                                    })
+                                                )
                                             )
                                         )
                                     )
                                 ),
-                                React.createElement('button', {
-                                    onClick: addToPortfolio,
-                                    className: 'mt-8 text-xs text-blue-400 hover:text-blue-300'
-                                }, '+ ADD TO PORTFOLIO FOR SIMULATION')
-                            ),
-
-                            result.counterfactual && React.createElement('div', { className: 'glass p-6 rounded-2xl border-blue-500/30' },
-                                React.createElement('h3', { className: 'text-lg font-semibold mb-4 flex items-center gap-2' }, 
-                                    React.createElement('span', { className: 'text-blue-400' }, '➔'), 'Actionable Counterfactual'
-                                ),
-                                React.createElement('p', { className: 'text-sm text-slate-400 mb-6' }, 'To reach the 72.0% approval threshold, this applicant would need the following changes:'),
-                                React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4' },
-                                    Object.entries(result.counterfactual.changes_required).map(([name, ch]) => 
-                                        React.createElement('div', { key: name, className: 'bg-slate-800/50 p-4 rounded-xl border border-slate-700' },
-                                            React.createElement('p', { className: 'text-[10px] uppercase text-slate-500' }, name),
-                                            React.createElement('div', { className: 'flex items-center gap-3 mt-1' },
-                                                React.createElement('span', { className: 'text-slate-400 line-through' }, ch.original),
-                                                React.createElement('span', { className: 'text-blue-400' }, '→'),
-                                                React.createElement('span', { className: 'text-emerald-400 font-bold' }, ch.counterfactual)
+                                // ADVERSE ACTION PANEL
+                                result.adverse_action && React.createElement('div', { className: 'glass p-6 rounded-3xl bg-rose-500/5' },
+                                    React.createElement('h4', { className: 'text-xs text-rose-400 uppercase font-bold mb-4 flex items-center gap-2' }, 
+                                        React.createElement('span', { className: 'text-rose-400' }, '⚠'), 'Adverse Action Reasons'
+                                    ),
+                                    React.createElement('div', { className: 'space-y-3' },
+                                        result.adverse_action.map(aa => 
+                                            React.createElement('div', { key: aa.code, className: 'p-3 bg-rose-500/10 rounded-xl border border-rose-500/10' },
+                                                React.createElement('p', { className: 'text-[9px] font-bold text-rose-400' }, aa.code),
+                                                React.createElement('p', { className: 'text-xs text-slate-300 mt-0.5' }, aa.reason)
                                             )
                                         )
                                     )
                                 )
                             )
-                        ) : React.createElement('div', { className: 'h-full flex flex-col items-center justify-center text-slate-600 glass rounded-2xl border-dashed border-2' },
-                            React.createElement('p', null, 'Enter student details and run assessment to see technical audit')
-                        )
-                    )
-                ),
-
-                // PANEL 4: Simulation
-                React.createElement('div', { className: 'mt-12' },
-                    React.createElement('div', { className: 'glass p-8 rounded-2xl' },
-                        React.createElement('div', { className: 'flex justify-between items-center mb-8' },
-                            React.createElement('div', null,
-                                React.createElement('h2', { className: 'text-2xl font-bold' }, 'Monte Carlo Portfolio Simulator'),
-                                React.createElement('p', { className: 'text-slate-400' }, `${portfolio.length} students currently in cohort`)
-                            ),
-                            React.createElement('button', {
-                                onClick: runSimulation,
-                                disabled: portfolio.length === 0,
-                                className: 'px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl font-bold'
-                            }, 'RUN SIMULATION')
-                        ),
-
-                        simResult && React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-4 gap-6' },
-                            [
-                                { label: 'Expected Loss', val: (simResult.expected_loss_rate * 100).toFixed(2) + '%' },
-                                { label: 'Value at Risk (95%)', val: (simResult.var_95 * 100).toFixed(2) + '%' },
-                                { label: 'Conditional VaR', val: (simResult.cvar_95 * 100).toFixed(2) + '%' },
-                                { label: 'Avg Repayment Prob', val: (simResult.average_repayment_probability * 100).toFixed(2) + '%' }
-                            ].map(m => 
-                                React.createElement('div', { key: m.label, className: 'bg-slate-900/50 p-6 rounded-xl border border-slate-800' },
-                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase mb-2' }, m.label),
-                                    React.createElement('p', { className: 'text-2xl font-bold text-slate-200' }, m.val)
-                                )
-                            )
+                        ) : React.createElement('div', { className: 'h-full flex flex-col items-center justify-center text-slate-600 glass rounded-3xl border-dashed border-2 min-h-[400px]' },
+                            React.createElement('div', { className: 'w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mb-4 text-3xl' }, '⚙'),
+                            React.createElement('p', { className: 'text-sm font-medium' }, 'Ready for technical assessment'),
+                            React.createElement('p', { className: 'text-xs text-slate-500 mt-1' }, 'Waiting for applicant profile validation')
                         )
                     )
                 )

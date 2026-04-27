@@ -1,4 +1,4 @@
-import subprocess, sys, json, time, os
+import subprocess, sys, json, time, os, requests
 
 def run_cmd(cmd):
     print(f"\n> Running: {cmd}")
@@ -43,24 +43,23 @@ def main():
 
     # Step 5: Docker Restart (or manual if docker not available)
     print("\n> Attempting to restart API container...")
-    run_cmd("docker-compose restart api || true")
+    run_cmd("docker compose restart api || true")
     
     print("\nWaiting for API to stabilize...")
     time.sleep(5)
     
     # Final Check
     try:
-        import requests
         r = requests.get("http://localhost:8000/v1/health")
-        if r.status_code == 200 and r.json().get("model_version") == "v3.0-temporal-graph":
-            print("✅ Step 5: API verified at v3.0")
+        if r.status_code == 200 and r.json().get("version") == "5.0.0":
+            print("✅ Step 5: API verified at v5.0.0")
         else:
             print(f"⚠️ API health check failed or version mismatch: {r.text}")
     except:
         print("⚠️ Could not reach API for final health check. Ensure it is running.")
 
     print("\n══════════════════════════════════════")
-    print("PHASE 3 DEPLOYMENT COMPLETE")
+    print("PHASE 5 DEPLOYMENT COMPLETE")
     print("══════════════════════════════════════")
 
 if __name__ == "__main__":

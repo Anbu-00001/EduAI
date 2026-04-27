@@ -15,6 +15,11 @@
         input, select { background: #1e293b !important; color: white !important; border: 1px solid #334155 !important; }
         .progress-bar { height: 8px; border-radius: 4px; background: #334155; overflow: hidden; position: relative; }
         .progress-fill { height: 100%; transition: width 0.5s ease-in-out; }
+        .tab-btn { padding: 0.5rem 1.5rem; border-radius: 9999px; font-weight: 600; cursor: pointer; transition: all 0.3s; }
+        .tab-btn.active { background: #3b82f6; color: white; }
+        .tab-btn.inactive { background: #1e293b; color: #94a3b8; }
+        .roadmap-line { position: absolute; left: 1.5rem; top: 0; bottom: 0; width: 2px; background: #334155; z-index: 0; }
+        .roadmap-node { position: relative; z-index: 1; }
     </style>
 </head>
 <body>
@@ -27,6 +32,7 @@
         const API_BASE = "http://localhost:8000/v1";
 
         const App = () => {
+            const [view, setView] = useState('lender'); // 'lender' or 'student'
             const [profile, setProfile] = useState({
                 cgpa: 8.5,
                 internships_count: 2,
@@ -40,6 +46,22 @@
             const [portfolio, setPortfolio] = useState([]);
             const [simResult, setSimResult] = useState(null);
             const [freshness, setFreshness] = useState(null);
+
+            // Student specific states
+            const [studentROI, setStudentROI] = useState(null);
+            const [fieldRankings, setFieldRankings] = useState(null);
+            const [skillGap, setSkillGap] = useState(null);
+            const [collegeROI, setCollegeROI] = useState(null);
+            const [collegeQuery, setCollegeQuery] = useState({
+                name: "IIT Delhi",
+                placement_rate: 92,
+                tuition: 200000,
+                loan: 800000
+            });
+            const [roiParams, setRoiParams] = useState({
+                interest_rate: 10.5,
+                tenure: 7
+            });
 
             useEffect(() => {
                 fetchFreshness();
@@ -102,12 +124,22 @@
                         React.createElement('h1', { className: 'text-4xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent' }, 'EduPredict AI'),
                         React.createElement('p', { className: 'text-slate-400 mt-2' }, 'Future Earning Potential Underwriting Engine')
                     ),
-                    React.createElement('div', { className: 'text-right' },
-                        React.createElement('span', { className: 'px-3 py-1 rounded-full bg-slate-800 text-xs text-slate-400 border border-slate-700' }, 'v3.0 TEMPORAL GRAPH')
+                    React.createElement('div', { className: 'text-right flex flex-col items-end gap-2' },
+                        React.createElement('span', { className: 'px-3 py-1 rounded-full bg-slate-800 text-xs text-slate-400 border border-slate-700' }, 'v5.0 STUDENT INTEL'),
+                        React.createElement('div', { className: 'flex gap-2 mt-2 bg-slate-900 p-1 rounded-full border border-slate-800' },
+                            React.createElement('button', { 
+                                className: `tab-btn text-xs ${view === 'lender' ? 'active' : 'inactive'}`,
+                                onClick: () => setView('lender')
+                            }, 'LENDER'),
+                            React.createElement('button', { 
+                                className: `tab-btn text-xs ${view === 'student' ? 'active' : 'inactive'}`,
+                                onClick: () => setView('student')
+                            }, 'STUDENT')
+                        )
                     )
                 ),
 
-                React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-8' },
+                view === 'lender' ? 
                     // PANEL 1: Input
                     React.createElement('div', { className: 'lg:col-span-4 space-y-6' },
                         React.createElement('div', { className: 'glass p-6 rounded-2xl' },
@@ -313,6 +345,270 @@
                                     React.createElement('p', { className: 'text-2xl font-bold text-slate-200' }, m.val)
                                 )
                             )
+                        )
+                    )
+                    )
+                ) : 
+                // STUDENT VIEW
+                React.createElement('div', { className: 'space-y-12' },
+                    // STUDENT PANEL 1: Loan ROI
+                    React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-8' },
+                        React.createElement('div', { className: 'lg:col-span-4' },
+                            React.createElement('div', { className: 'glass p-6 rounded-2xl' },
+                                React.createElement('h2', { className: 'text-xl font-semibold mb-6' }, 'Loan ROI Calculator'),
+                                React.createElement('div', { className: 'space-y-4' },
+                                    React.createElement('div', null,
+                                        React.createElement('label', { className: 'block text-xs text-slate-400 uppercase mb-1' }, 'Interest Rate (%)'),
+                                        React.createElement('input', {
+                                            type: 'number', className: 'w-full p-2 rounded-lg', step: '0.1',
+                                            value: roiParams.interest_rate,
+                                            onChange: (e) => setRoiParams({...roiParams, interest_rate: parseFloat(e.target.value)})
+                                        })
+                                    ),
+                                    React.createElement('div', null,
+                                        React.createElement('label', { className: 'block text-xs text-slate-400 uppercase mb-1' }, 'Tenure (Years)'),
+                                        React.createElement('input', {
+                                            type: 'number', className: 'w-full p-2 rounded-lg',
+                                            value: roiParams.tenure,
+                                            onChange: (e) => setRoiParams({...roiParams, tenure: parseInt(e.target.value)})
+                                        })
+                                    ),
+                                    React.createElement('button', {
+                                        onClick: async () => {
+                                            setLoading(true);
+                                            try {
+                                                const r = await fetch(`${API_BASE}/student/loan-roi?annual_interest_rate=${roiParams.interest_rate/100}&tenure_years=${roiParams.tenure}`, {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify(profile)
+                                                });
+                                                setStudentROI(await r.json());
+                                            } catch (e) { alert("ROI Error"); }
+                                            setLoading(false);
+                                        },
+                                        className: 'w-full mt-4 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-semibold'
+                                    }, 'ANALYSE LOAN WORTH')
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'lg:col-span-8' },
+                            studentROI ? React.createElement('div', { className: 'glass p-8 rounded-2xl' },
+                                React.createElement('div', { className: 'flex justify-between items-start mb-8' },
+                                    React.createElement('div', null,
+                                        React.createElement('span', { className: `px-3 py-1 rounded text-xs font-bold ${studentROI.roi_analysis.investment_verdict === 'POSITIVE_ROI' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}` }, studentROI.roi_analysis.investment_verdict),
+                                        React.createElement('h3', { className: 'text-2xl font-bold mt-2' }, `Break-even: ${studentROI.roi_analysis.break_even_year || '>10'} Years`),
+                                        React.createElement('p', { className: 'text-slate-400' }, `NPV: ₹${(studentROI.roi_analysis.npv_inr / 1e5).toFixed(2)}L`)
+                                    ),
+                                    React.createElement('div', { className: 'text-right' },
+                                        React.createElement('p', { className: 'text-xs text-slate-500 uppercase' }, 'Monthly EMI'),
+                                        React.createElement('p', { className: 'text-2xl font-bold' }, `₹${studentROI.roi_analysis.emi_inr.toLocaleString()}`)
+                                    )
+                                ),
+                                React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-8' },
+                                    React.createElement('div', null,
+                                        React.createElement('h4', { className: 'text-xs text-slate-500 uppercase mb-4' }, '5-Year Salary Trajectory'),
+                                        React.createElement('div', { className: 'flex items-end gap-2 h-32' },
+                                            studentROI.roi_analysis.salary_trajectory.map((s, i) => 
+                                                React.createElement('div', { key: i, className: 'flex-1 bg-blue-500/30 rounded-t relative group' },
+                                                    React.createElement('div', { 
+                                                        className: 'bg-blue-500 rounded-t transition-all',
+                                                        style: { height: `${(s / Math.max(...studentROI.roi_analysis.salary_trajectory)) * 100}%` }
+                                                    }),
+                                                    React.createElement('span', { className: 'hidden group-hover:block absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] bg-slate-800 p-1 rounded' }, `₹${(s/1e5).toFixed(1)}L`)
+                                                )
+                                            )
+                                        ),
+                                        React.createElement('div', { className: 'flex justify-between mt-2 text-[10px] text-slate-500' }, 
+                                            ['Y1','Y2','Y3','Y4','Y5'].map(y => React.createElement('span', {key: y}, y))
+                                        )
+                                    ),
+                                    React.createElement('div', null,
+                                        React.createElement('h4', { className: 'text-xs text-slate-500 uppercase mb-4' }, 'EMI-to-Salary Ratio (Debt Risk)'),
+                                        React.createElement('div', { className: 'space-y-4' },
+                                            studentROI.roi_analysis.emi_to_salary_ratios.map((r, i) => 
+                                                React.createElement('div', { key: i },
+                                                    React.createElement('div', { className: 'flex justify-between text-[10px] mb-1' },
+                                                        React.createElement('span', null, `Year ${i+1}`),
+                                                        React.createElement('span', { className: r > 0.5 ? 'text-red-400' : r > 0.3 ? 'text-amber-400' : 'text-emerald-400' }, `${(r*100).toFixed(1)}%`)
+                                                    ),
+                                                    React.createElement('div', { className: 'progress-bar' },
+                                                        React.createElement('div', { 
+                                                            className: `progress-fill ${r > 0.5 ? 'bg-red-500' : r > 0.3 ? 'bg-amber-500' : 'bg-emerald-500'}`,
+                                                            style: { width: `${Math.min(r * 100, 100)}%` }
+                                                        })
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    )
+                                ),
+                                studentROI.roi_analysis.debt_serviceability === 'DEBT_TRAP_RISK' && 
+                                React.createElement('div', { className: 'mt-6 p-4 bg-red-500/10 border border-red-500/50 rounded-xl text-red-500 text-sm flex items-center gap-3' },
+                                    React.createElement('span', { className: 'text-2xl' }, '⚠️'),
+                                    React.createElement('div', null,
+                                        React.createElement('p', { className: 'font-bold' }, 'DEBT TRAP WARNING'),
+                                        React.createElement('p', { className: 'text-xs' }, 'The loan EMI exceeds 50% of your projected starting salary. This is highly risky.')
+                                    )
+                                )
+                            ) : React.createElement('div', { className: 'h-full flex items-center justify-center glass rounded-2xl border-dashed border-2 text-slate-600' }, 'Run analysis to view ROI projections')
+                        )
+                    ),
+
+                    // STUDENT PANEL 2: Field Ranker
+                    React.createElement('div', { className: 'glass p-8 rounded-2xl' },
+                        React.createElement('div', { className: 'flex justify-between items-center mb-8' },
+                            React.createElement('div', null,
+                                React.createElement('h2', { className: 'text-2xl font-bold' }, 'Live Market Opportunity Ranking'),
+                                React.createElement('p', { className: 'text-slate-400' }, 'Based on live job demand and ROI metrics')
+                            ),
+                            React.createElement('button', {
+                                onClick: async () => {
+                                    const r = await fetch(`${API_BASE}/student/field-ranking?current_field=${profile.field_of_study}`);
+                                    setFieldRankings(await r.json());
+                                },
+                                className: 'px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-bold'
+                            }, 'REFRESH RANKINGS')
+                        ),
+                        fieldRankings && React.createElement('div', { className: 'overflow-x-auto' },
+                            React.createElement('table', { className: 'w-full' },
+                                React.createElement('thead', null,
+                                    React.createElement('tr', { className: 'text-left text-xs text-slate-500 uppercase border-b border-slate-800' },
+                                        ['Rank', 'Field', 'Market Score', 'Demand', 'Switch Cost', 'ROI Rank'].map(h => React.createElement('th', { key: h, className: 'pb-4 px-2' }, h))
+                                    )
+                                ),
+                                React.createElement('tbody', null,
+                                    fieldRankings.rankings.map(r => 
+                                        React.createElement('tr', { key: r.field, className: `text-sm border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${r.is_student_field ? 'bg-blue-500/10' : ''}` },
+                                            React.createElement('td', { className: 'py-4 px-2 font-mono' }, `#${r.rank}`),
+                                            React.createElement('td', { className: 'py-4 px-2 font-semibold' }, r.field.replace(/_/g, ' ').toUpperCase()),
+                                            React.createElement('td', { className: 'py-4 px-2' }, 
+                                                React.createElement('div', { className: 'flex items-center gap-2' },
+                                                    React.createElement('div', { className: 'w-16 h-1.5 bg-slate-800 rounded' },
+                                                        React.createElement('div', { className: 'h-full bg-blue-400 rounded', style: { width: `${r.composite_score * 100}%` } })
+                                                    ),
+                                                    React.createElement('span', { className: 'text-[10px]' }, r.composite_score.toFixed(2))
+                                                )
+                                            ),
+                                            React.createElement('td', { className: 'py-4 px-2' }, 
+                                                React.createElement('span', { className: `text-[10px] px-2 py-0.5 rounded ${r.demand_tier === 'HIGH' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}` }, r.demand_tier)
+                                            ),
+                                            React.createElement('td', { className: 'py-4 px-2 text-slate-400' }, r.transfer_cost ? r.transfer_cost.toFixed(2) : '-'),
+                                            React.createElement('td', { className: 'py-4 px-2 font-bold text-emerald-400' }, `#${r.recommendation_rank}`)
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    ),
+
+                    // STUDENT PANEL 3: Skill Gap Roadmap
+                    React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-8' },
+                        React.createElement('div', { className: 'lg:col-span-5' },
+                            React.createElement('div', { className: 'glass p-8 rounded-2xl h-full' },
+                                React.createElement('h2', { className: 'text-2xl font-bold mb-6' }, 'My Skill Gap Roadmap'),
+                                React.createElement('p', { className: 'text-slate-400 mb-8' }, 'Personalised actions to move your profile to the GREEN (Approved) tier.'),
+                                React.createElement('button', {
+                                    onClick: async () => {
+                                        setLoading(true);
+                                        const r = await fetch(`${API_BASE}/student/skill-gap`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(profile)
+                                        });
+                                        setSkillGap(await r.json());
+                                        setLoading(false);
+                                    },
+                                    className: 'w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-bold shadow-lg shadow-blue-900/20'
+                                }, 'GENERATE ROADMAP')
+                            )
+                        ),
+                        React.createElement('div', { className: 'lg:col-span-7' },
+                            skillGap ? React.createElement('div', { className: 'glass p-8 rounded-2xl relative' },
+                                React.createElement('div', { className: 'roadmap-line' }),
+                                React.createElement('div', { className: 'space-y-8' },
+                                    skillGap.priority_actions.map((a, i) => 
+                                        React.createElement('div', { key: i, className: 'roadmap-node flex gap-6' },
+                                            React.createElement('div', { className: 'w-12 h-12 rounded-full bg-slate-900 border-2 border-blue-500 flex items-center justify-center shrink-0 font-bold text-blue-400 shadow-lg shadow-blue-500/20' }, i + 1),
+                                            React.createElement('div', { className: 'flex-1 pt-1' },
+                                                React.createElement('div', { className: 'flex justify-between items-start' },
+                                                    React.createElement('h4', { className: 'font-bold text-slate-200' }, a.action),
+                                                    React.createElement('span', { className: 'text-emerald-400 font-mono text-sm' }, `+${(a.probability_lift * 100).toFixed(1)}%`)
+                                                ),
+                                                React.createElement('div', { className: 'flex gap-4 mt-2 text-[10px] text-slate-500 uppercase tracking-wider' },
+                                                    React.createElement('span', null, `⏳ ${a.time_months} Months`),
+                                                    React.createElement('span', null, `💪 Effort: ${a.effort_score}/10`),
+                                                    React.createElement('span', null, `🎯 ${a.feasibility}`)
+                                                ),
+                                                a.resources.length > 0 && React.createElement('div', { className: 'mt-3 flex flex-wrap gap-2' },
+                                                    a.resources.map(res => React.createElement('span', { key: res, className: 'text-[9px] bg-slate-800 px-2 py-1 rounded text-blue-300' }, res))
+                                                )
+                                            )
+                                        )
+                                    ),
+                                    React.createElement('div', { className: 'roadmap-node flex gap-6' },
+                                        React.createElement('div', { className: 'w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 text-white shadow-lg shadow-emerald-500/30' }, '✓'),
+                                        React.createElement('div', { className: 'flex-1 pt-3' },
+                                            React.createElement('h4', { className: 'font-bold text-emerald-400' }, 'GREEN TIER ACHIEVED'),
+                                            React.createElement('p', { className: 'text-xs text-slate-500' }, `Estimated time: ${skillGap.estimated_time_to_green_months || 0} months`)
+                                        )
+                                    )
+                                )
+                            ) : React.createElement('div', { className: 'h-full flex items-center justify-center glass rounded-2xl border-dashed border-2 text-slate-600' }, 'Click generate to see your path to approval')
+                        )
+                    ),
+
+                    // STUDENT PANEL 4: College ROI
+                    React.createElement('div', { className: 'glass p-8 rounded-2xl' },
+                        React.createElement('h2', { className: 'text-2xl font-bold mb-8' }, 'College ROI Scorer'),
+                        React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-4 gap-6 mb-8' },
+                            ['name', 'placement_rate', 'tuition', 'loan'].map(k => 
+                                React.createElement('div', { key: k },
+                                    React.createElement('label', { className: 'block text-xs text-slate-500 uppercase mb-2' }, k.replace(/_/g, ' ')),
+                                    React.createElement('input', {
+                                        type: k === 'name' ? 'text' : 'number',
+                                        className: 'w-full p-3 rounded-xl',
+                                        value: collegeQuery[k],
+                                        onChange: (e) => setCollegeQuery({...collegeQuery, [k]: e.target.value})
+                                    })
+                                )
+                            )
+                        ),
+                        React.createElement('button', {
+                            onClick: async () => {
+                                const params = new URLSearchParams({
+                                    college_name: collegeQuery.name,
+                                    field: profile.field_of_study,
+                                    placement_rate_pct: collegeQuery.placement_rate,
+                                    annual_tuition_inr: collegeQuery.tuition,
+                                    loan_amount_inr: collegeQuery.loan
+                                });
+                                const r = await fetch(`${API_BASE}/student/college-roi?${params.toString()}`, { method: 'POST' });
+                                setCollegeROI(await r.json());
+                            },
+                            className: 'w-full py-4 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold border border-slate-700 transition-all mb-8'
+                        }, 'CHECK COLLEGE ROI'),
+                        collegeROI && React.createElement('div', { className: 'p-8 bg-slate-900/50 rounded-2xl border border-slate-800' },
+                            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-8' },
+                                React.createElement('div', null,
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase mb-1' }, 'ROI Index'),
+                                    React.createElement('div', { className: 'flex items-center gap-3' },
+                                        React.createElement('span', { className: 'text-3xl font-bold' }, collegeROI.roi_index),
+                                        React.createElement('span', { className: `px-2 py-0.5 rounded text-[10px] font-bold ${collegeROI.roi_tier === 'STRONG_ROI' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}` }, collegeROI.roi_tier)
+                                    )
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase mb-1' }, 'Loan-to-Salary Ratio'),
+                                    React.createElement('div', { className: 'flex items-center gap-3' },
+                                        React.createElement('span', { className: 'text-3xl font-bold' }, collegeROI.lts_ratio),
+                                        React.createElement('span', { className: `px-2 py-0.5 rounded text-[10px] font-bold ${collegeROI.lts_risk === 'SAFE' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}` }, collegeROI.lts_risk)
+                                    )
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('p', { className: 'text-xs text-slate-500 uppercase mb-1' }, 'Verdict'),
+                                    React.createElement('p', { className: `text-xl font-bold ${collegeROI.verdict === 'RECOMMENDED' ? 'text-emerald-400' : 'text-red-400'}` }, collegeROI.verdict)
+                                )
+                            ),
+                            React.createElement('p', { className: 'mt-8 text-slate-400 italic text-sm border-t border-slate-800 pt-6' }, collegeROI.explanation)
                         )
                     )
                 )

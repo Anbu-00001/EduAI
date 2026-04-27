@@ -1,0 +1,15 @@
+artifact_path: /home/anbu/25_class/Sem_4/EduAI/edupredict-ai/mlruns/1/models/m-215da88862e740978015f93d706fc904/artifacts
+flavors:
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+    skops_trusted_types: null
+mlflow_version: 3.11.1
+model_id: m-215da88862e740978015f93d706fc904
+model_size_bytes: 1065
+model_uuid: m-215da88862e740978015f93d706fc904
+prompts: null
+run_id: a7334110b0be41a29dade36c6d895383
+utc_time_created: '2026-04-27 12:18:35.115223'
