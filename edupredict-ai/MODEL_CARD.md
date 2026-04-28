@@ -15,19 +15,19 @@ Advisory risk scoring for Indian student education loan applications
 
 | Metric | Value |
 |--------|-------|
-| Graph-regularised AUC | 0.7867 |
-| vs CIBIL-only baseline | +0.1667 |
-| Calibration ECE | 0.0258 |
-| Conformal coverage (90% target) | 0.923 |
+| Graph-regularised AUC | 0.8265 |
+| vs CIBIL-only baseline | +0.2065 |
+| Calibration ECE | 0.0098 |
+| Conformal coverage (90% target) | 0.882 |
 
 ## Fairness Audit
 
 | Metric | Value | Threshold | Status |
 |--------|-------|-----------|--------|
-| Demographic Parity Index | 0.8241 | ≥ 0.80 | PASS |
-| Equalized Odds TPR diff | 0.0943 | ≤ 0.10 | PASS |
-| Equalized Odds FPR diff | 0.1798 | ≤ 0.10 | FAIL |
-| Predictive Parity diff | 0.1014 | ≤ 0.10 | FAIL |
+| Demographic Parity Index | 0.9545 | ≥ 0.80 | PASS |
+| Equalized Odds TPR diff | 0.0380 | ≤ 0.10 | PASS |
+| Equalized Odds FPR diff | 0.1111 | ≤ 0.10 | FAIL |
+| Predictive Parity diff | 0.1459 | ≤ 0.10 | FAIL |
 
 ## Regulatory Compliance
 - **RBI FREE-AI Framework (August 2025)**: Explainability via SHAP, Fairness via DPI ≥ 0.80
@@ -35,6 +35,6 @@ Advisory risk scoring for Indian student education loan applications
 - **Adverse Action**: Reason codes generated for all RED-tier decisions
 
 ## Known Limitations
-- Training data uses US consumer loan outcomes as proxy for Indian student loans
+- Repayment labels are synthetic (calibrated to RBI 4.4% NPA)
 - Velocity features require ≥2 DAG snapshots (zeros until second run)
-- No real Indian student repayment outcome data in training set
+- Field-level salary medians used as proxy for individual income

@@ -6,6 +6,12 @@ import pandas as pd
 import logging
 from sklearn.metrics import log_loss
 from config import EnvConfig, FIELD_QUERIES
+from prometheus_client import Counter
+
+MACRO_FALLBACK_COUNTER = Counter(
+    "edupredict_macro_fallback_total",
+    "Total number of times data.gov.in macro fetch failed and used fallback"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +61,14 @@ def compute_macro_index(datagov_api_key: str = None) -> float:
                 if records:
                     unemp_rate = float(records[0].get("unemployment_rate", 0.13)) / 100
                     components["unemployment"] = unemp_rate
+                else:
+                    raise ValueError("Meta not found")
+            else:
+                resp.raise_for_status()
     except Exception as e:
-        logger.warning(f"Could not fetch unemployment rate: {e}")
-        components["unemployment"] = 0.13  # PLFS 2024 known value (documented)
+        logger.warning(f"data.gov.in API failure: {e}. Using IMRI_DEFAULT fallback.")
+        MACRO_FALLBACK_COUNTER.inc()
+        components["unemployment"] = float(EnvConfig.IMRI_DEFAULT())
 
     # 2. RBI repo rate — public knowledge, stable
     components["repo_rate"] = EnvConfig.RBI_REPO_RATE()
@@ -83,7 +94,7 @@ def compute_macro_index(datagov_api_key: str = None) -> float:
         components["hiring_index"] = 0.5
 
     # Default values to ensure components exists even if API fails
-    components.setdefault("unemployment", 0.13)
+    components.setdefault("unemployment", float(EnvConfig.IMRI_DEFAULT()))
     components.setdefault("repo_rate", 0.065)
     components.setdefault("cpi_education", 0.05)
     components.setdefault("hiring_index", 0.5)
@@ -296,6 +307,10 @@ def add_temporal_features(feature_df, velocity_df, demand_df):
         feature_df["demand_momentum"] = 0.7 * feature_df.get("demand_proxy", 0.5)
         feature_df["market_hhi"] = 1.0 / 7.0
         return feature_df
+    
+    # Drop existing temporal columns if they exist to avoid _x/_y suffixes after merge
+    temporal_cols = ["demand_velocity_per_day", "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi"]
+    feature_df = feature_df.drop(columns=[c for c in temporal_cols if c in feature_df.columns])
     
     # Merge velocity
     df = feature_df.merge(velocity_df, left_on=merge_col, right_on="field", how="left")

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from config import EnvConfig, DomainConstants, PIPELINE_DIR
 # Import these from config if they were added as attributes of a class, but wait, I just appended them to the end of config.py.
-from config import FIELD_QUERIES, SOURCE_DECAY
+from config import FIELD_QUERIES, SOURCE_DECAY, SOURCE_WEIGHTS
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,6 @@ CACHE_PATH = PIPELINE_DIR / "demand_cache.json"
 ENDPOINTS = {
     "naukri": "https://www.naukri.com/jobapi/v3/search",
     "linkedin": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
-    "indeed": "https://india.indeed.com/rss", # Mocking RSS behavior
     "datagov": "https://api.data.gov.in/resource/8d052a6a-d6e6-427c-9b59-1a052e46d29d" # PLFS sample
 }
 
@@ -65,9 +64,8 @@ async def fetch_linkedin(session: aiohttp.ClientSession, field: str) -> Optional
     return None
 
 async def fetch_indeed(session: aiohttp.ClientSession, field: str) -> Optional[int]:
-    # Mocking Indeed India RSS count as it's often scraper-blocked
-    await asyncio.sleep(0.5)
-    return np.random.randint(1000, 5000)
+    # Indeed India is scraper-blocked; stubbing to avoid noise
+    return None
 
 async def fetch_datagov(session: aiohttp.ClientSession, field: str) -> Optional[int]:
     api_key = EnvConfig.DATAGOV_API_KEY()
@@ -144,7 +142,8 @@ async def run_dag():
         for _, row in field_data.iterrows():
             w_f = freshness_weight(row["retrieved_at"], SOURCE_DECAY[row["source"]])
             w_r = row["reliability"]
-            weight = w_f * w_r
+            w_s = SOURCE_WEIGHTS.get(row["source"], 1.0)
+            weight = w_f * w_r * w_s
             
             sum_weights += weight
             sum_weighted_count += weight * row["count"]

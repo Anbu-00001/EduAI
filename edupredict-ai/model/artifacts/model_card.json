@@ -4,7 +4,7 @@
     "version": "v4.0-production",
     "type": "Stacked ensemble (XGBoost + LightGBM + CatBoost) + Logistic meta-learner",
     "task": "Binary classification \u2014 student loan repayment prediction",
-    "date_trained": "2026-04-28T06:13:22.607564",
+    "date_trained": "2026-04-28T12:59:12.748305",
     "license": "MIT",
     "contact": "dpo@edupredict.ai"
   },
@@ -20,36 +20,36 @@
   },
   "training_data": {
     "sources": [
-      "Kaggle: Student Placement Dataset (CGPA, internships, placement)",
-      "Kaggle: Lending Club Loan Data (repayment outcomes as proxy)",
-      "Kaggle: US College Scorecard (salary by field)",
-      "Live: Naukri job API (demand by field)",
-      "Live: data.gov.in PLFS (employment statistics)"
+      "IEEE DataPort: Engineering Graduate Employability (12k Indian students)",
+      "NIRF 2024: Ministry of Education Institutional Rankings",
+      "Kaggle: Indian Student Placement Dataset 2025",
+      "Live: Naukri & LinkedIn job APIs (demand consensus)",
+      "Live: data.gov.in PLFS (macro indicators)"
     ],
     "known_limitations": [
-      "Lending Club data is US consumer loans \u2014 not Indian student loans",
-      "Salary data from US Scorecard \u2014 adjusted for India PPP",
-      "No real Indian student loan repayment outcome data in training set"
+      "Repayment labels are synthetic (calibrated to RBI 4.4% NPA)",
+      "Field-level salary medians used as proxy for individual income",
+      "No real Indian student loan repayment microdata available in training set"
     ],
-    "n_training_samples": 6000
+    "n_training_samples": 4800
   },
   "performance": {
     "primary_metric": "ROC-AUC (graph-regularised)",
-    "auc": 0.7867,
+    "auc": 0.8265,
     "baseline_auc_cibil_only": 0.62,
-    "auc_improvement": 0.1667,
-    "calibration_ece": 0.0258,
+    "auc_improvement": 0.2065,
+    "calibration_ece": 0.0098,
     "calibration_method": "isotonic",
-    "conformal_coverage_90pct": 0.923,
-    "conformal_q_hat": 0.6713780918727914
+    "conformal_coverage_90pct": 0.8825,
+    "conformal_q_hat": 0.11111111111111116
   },
   "fairness": {
     "sensitive_attribute": "Field of study (proxy for socioeconomic background)",
     "metrics": {
-      "demographic_parity_index": 0.8240989399293287,
-      "equalized_odds_tpr_diff": 0.09432272509195583,
-      "equalized_odds_fpr_diff": 0.17982456140350878,
-      "predictive_parity_diff": 0.10135674381484439
+      "demographic_parity_index": 0.9545454545454546,
+      "equalized_odds_tpr_diff": 0.03797468354430378,
+      "equalized_odds_fpr_diff": 0.11111111111111116,
+      "predictive_parity_diff": 0.14590964590964595
     },
     "overall_fair": false,
     "fairness_standard": "80% rule (ECOA / RBI FREE-AI Framework)",
@@ -65,7 +65,7 @@
     "calibration": "isotonic",
     "graph_regularisation": {
       "method": "RBF kernel k-NN (k=50)",
-      "alpha": 0.7959183673469387,
+      "alpha": 1.0,
       "sigma": "Median heuristic"
     },
     "uncertainty": "Split conformal prediction (Angelopoulos & Bates 2021)"
@@ -73,94 +73,101 @@
   "features": {
     "cgpa_normalized": {
       "range": [
-        0.6000279697327727,
-        0.9499944588987376
+        0.4089756526704269,
+        1.0
       ],
       "description": "CGPA normalised to [0,1] by dividing by 10"
     },
     "internships_count": {
       "range": [
         0.0,
-        3.0
+        7.0
       ],
       "description": "Number of internships completed"
     },
     "backlogs": {
       "range": [
         0.0,
-        2.0
+        6.0
       ],
       "description": "Number of academic backlogs/arrears"
     },
     "median_salary_normalized": {
       "range": [
-        0.0947519370121992,
-        0.8561435286519303
+        0.5,
+        0.5
       ],
       "description": "Median salary for field, normalised to [0,1]"
     },
     "potential_score": {
       "range": [
-        0.3544604799861133,
-        0.9144474192061908
+        0.3527108586530111,
+        0.885352862515148
       ],
       "description": "Weighted composite: 0.35*CGPA + 0.25*internships + 0.25*placement + 0.15*salary"
     },
     "demand_proxy": {
       "range": [
-        0.0947519370121992,
-        0.8561435286519303
+        0.5,
+        0.5
       ],
       "description": "Normalised job posting count for student's field"
     },
     "placement_rate_for_field": {
       "range": [
-        0.4000030910211897,
-        0.949901102957636
+        0.3505880708981946,
+        0.9499791064602764
       ],
       "description": "Institution placement rate [0,1]"
     },
     "demand_velocity_per_day": {
       "range": [
-        -51.31187007205783,
-        808.6026554336345
+        -509.81835970266803,
+        151.4547336215276
       ],
       "description": "OLS slope of job count over time (jobs/day)"
     },
     "demand_acceleration": {
       "range": [
-        -109983.12515903155,
-        140182.81125074378
+        -141088.55006153794,
+        66448.73942235499
       ],
       "description": "Second derivative of job demand (jobs/day\u00b2)"
     },
     "velocity_r_squared": {
       "range": [
-        -9.845368396901563,
-        -2.898869394897614
+        -4.256031090688557,
+        -2.201802269894634
       ],
       "description": "OLS fit quality for demand trend (0=noisy, 1=clean)"
     },
     "demand_momentum": {
       "range": [
-        0.145357578801887,
-        0.8677118720758097
+        0.3535533905932738,
+        0.6464466094062833
       ],
       "description": "EWMA: 0.3*velocity + 0.7*demand_proxy"
     },
     "market_hhi": {
       "range": [
-        0.15506508338661482,
-        0.15506508338661482
+        0.14285714285714285,
+        0.14285714285714285
       ],
       "description": "Herfindahl-Hirschman Index of field concentration"
     },
     "macro_index": {
       "range": [
-        0.511608273612401,
-        0.511608273612401
+        0.28458333333333335,
+        0.28458333333333335
       ],
       "description": "India Macro Repayment Index: composite of unemployment, repo rate, CPI, hiring"
+    },
+    "backlogs_missing": {
+      "range": [
+        0.0,
+        0.0
+      ],
+      "description": "Binary indicator: 1 if backlog data was imputed using field median"
     }
   },
   "regulatory_compliance": {

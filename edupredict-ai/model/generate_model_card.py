@@ -53,16 +53,16 @@ def generate_model_card() -> dict:
         },
         "training_data": {
             "sources": [
-                "Kaggle: Student Placement Dataset (CGPA, internships, placement)",
-                "Kaggle: Lending Club Loan Data (repayment outcomes as proxy)",
-                "Kaggle: US College Scorecard (salary by field)",
-                "Live: Naukri job API (demand by field)",
-                "Live: data.gov.in PLFS (employment statistics)",
+                "IEEE DataPort: Engineering Graduate Employability (12k Indian students)",
+                "NIRF 2024: Ministry of Education Institutional Rankings",
+                "Kaggle: Indian Student Placement Dataset 2025",
+                "Live: Naukri & LinkedIn job APIs (demand consensus)",
+                "Live: data.gov.in PLFS (macro indicators)",
             ],
             "known_limitations": [
-                "Lending Club data is US consumer loans — not Indian student loans",
-                "Salary data from US Scorecard — adjusted for India PPP",
-                "No real Indian student loan repayment outcome data in training set",
+                "Repayment labels are synthetic (calibrated to RBI 4.4% NPA)",
+                "Field-level salary medians used as proxy for individual income",
+                "No real Indian student loan repayment microdata available in training set",
             ],
             "n_training_samples": metrics.get("train_size", "see metrics.json"),
         },
@@ -138,6 +138,7 @@ def _feature_description(col: str) -> str:
         "demand_momentum":          "EWMA: 0.3*velocity + 0.7*demand_proxy",
         "market_hhi":               "Herfindahl-Hirschman Index of field concentration",
         "macro_index":              "India Macro Repayment Index: composite of unemployment, repo rate, CPI, hiring",
+        "backlogs_missing":         "Binary indicator: 1 if backlog data was imputed using field median",
     }
     return desc.get(col, col)
 
@@ -182,9 +183,9 @@ def _card_to_markdown(card: dict) -> str:
 - **Adverse Action**: Reason codes generated for all RED-tier decisions
 
 ## Known Limitations
-- Training data uses US consumer loan outcomes as proxy for Indian student loans
+- Repayment labels are synthetic (calibrated to RBI 4.4% NPA)
 - Velocity features require ≥2 DAG snapshots (zeros until second run)
-- No real Indian student repayment outcome data in training set
+- Field-level salary medians used as proxy for individual income
 """
 
 

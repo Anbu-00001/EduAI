@@ -7,13 +7,39 @@ from fastapi.testclient import TestClient
 # Add project to path
 sys.path.append(os.getcwd())
 
-from app.api.main import app
+from app.api.main import app, StudentProfile
 from model.conformal import ConformalPredictor
 from model.fairness import audit_fairness, apply_fairness_constraint
 from model.drift import compute_psi
 from model.loan_roi import compute_loan_roi
 from model.skill_gap import generate_skill_gap_report
 from config import EnvConfig, DomainConstants
+
+from app.api.auth import get_current_tenant
+from unittest.mock import MagicMock
+app.dependency_overrides[get_current_tenant] = lambda: {"tenant_id": "demo_lender", "rate_limit_rpm": 1000}
+app.state.metrics = {}
+app.state.demand_lookup = {}
+app.state.velocity_lookup = {}
+app.state.market_hhi = 0.143
+app.state.macro_index = 0.72
+app.state.scaler = MagicMock()
+app.state.meta_model = MagicMock()
+app.state.base_models = {"xgb": [MagicMock()], "lgb": [MagicMock()], "cat": [MagicMock()]}
+app.state.calibration = {"method": "isotonic", "bins": [0, 1], "lookup": [0, 1]}
+app.state.conformal_qhat = 0.1
+app.state.feature_ranges = {}
+app.state.X_train = np.random.rand(10, 14)
+app.state.y_train = np.random.randint(0, 2, 10)
+app.state.graph_params = {"alpha": 0.5}
+app.state.db_pool = MagicMock()
+
+import app.api.main as main_module
+main_module.build_peer_cohort_graph = MagicMock(return_value=np.array([0.8]))
+main_module.select_best_calibrator = MagicMock(return_value=(MagicMock(), "isotonic", 0.01))
+
+import shap
+shap.TreeExplainer = MagicMock()
 
 client = TestClient(app)
 
@@ -94,3 +120,49 @@ def test_skill_gap_priority():
     # Internships should probably be higher priority than CGPA due to effort scores
     assert len(report.actions) == 2
     assert report.actions[0].priority_score >= report.actions[1].priority_score
+
+def test_phase_5_bug_fixes():
+    # Bug 1: salary_norm NIRF lookup
+    from app.api.main import build_features
+    # CS median 8.5L -> norm ~0.34
+    # Civil median 4.2L -> norm ~0.10
+    f_cs = build_features(
+        StudentProfile(cgpa=8.0, internships_count=1, backlogs=0, field_of_study="computer_science", college_placement_rate=80, loan_amount_inr=500000, user_hash="test"),
+        {}, {}, 0.14, 0.72
+    )
+    f_civil = build_features(
+        StudentProfile(cgpa=8.0, internships_count=1, backlogs=0, field_of_study="civil_engineering", college_placement_rate=80, loan_amount_inr=500000, user_hash="test"),
+        {}, {}, 0.14, 0.72
+    )
+    assert f_cs[3] > f_civil[3], "CS salary norm should be higher than Civil"
+
+    # Bug 2: backlogs_missing presence
+    assert len(f_cs) == 14, "Feature vector must have 14 elements (V5)"
+    assert f_cs[13] == 0, "backlogs_missing should be 0 for standard inference"
+
+    # Bug 3: loan_amount_inr upper bound
+    response = client.post("/v1/assess", json={
+        "cgpa": 8.0, "internships_count": 1, "backlogs": 0,
+        "field_of_study": "computer_science", "college_placement_rate": 80,
+        "loan_amount_inr": 6000000, "user_hash": "test"
+    })
+    assert response.status_code == 422 # Pydantic validation error
+
+    # Bug 4: user_hash mandatory
+    response = client.post("/v1/assess", json={
+        "cgpa": 8.0, "internships_count": 1, "backlogs": 0,
+        "field_of_study": "computer_science", "college_placement_rate": 80,
+        "loan_amount_inr": 500000
+    })
+    assert response.status_code == 422 # Mandatory check
+
+    # Bug 5: CORS wildcard fix
+    from config import EnvConfig
+    origins = EnvConfig.ALLOWED_ORIGINS()
+    assert "*" not in origins, "CORS should not use wildcard in Phase 5"
+
+    # Bug 6: safe_load_artifact integrity
+    from model.data_builder import safe_load_artifact
+    with pytest.raises(RuntimeError):
+        # Pass a wrong hash
+        safe_load_artifact("model/artifacts/scaler.pkl", {"scaler.pkl": "wrong_hash"})

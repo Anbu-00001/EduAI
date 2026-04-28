@@ -118,6 +118,35 @@ class EnvConfig:
         "Default API rate limit (requests per minute) for new tenants"
     ))
 
+    # CORS
+    ALLOWED_ORIGINS = lambda: EnvConfig.optional(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173,http://localhost:8501",
+        "Comma-separated allowed CORS origins. Add your production domain in prod."
+    )
+
+    # IMRI default when data.gov.in is unreachable
+    IMRI_DEFAULT = lambda: float(EnvConfig.optional(
+        "IMRI_DEFAULT", "0.72",
+        "Fallback India Macro Repayment Index when PLFS API is unreachable. "
+        "0.72 = derived from PLFS 2023-24 Q3 values. Update quarterly."
+    ))
+
+    # JanParichay (not yet active — placeholder for future integration)
+    JANPARICHAY_CLIENT_ID = lambda: EnvConfig.optional(
+        "JANPARICHAY_CLIENT_ID", "",
+        "MeriPehchaan OAuth2 client ID. Register at jppartners.meripehchaan.gov.in. "
+        "Required for DigiLocker academic record auto-fill."
+    )
+    JANPARICHAY_CLIENT_SECRET = lambda: EnvConfig.optional(
+        "JANPARICHAY_CLIENT_SECRET", "",
+        "MeriPehchaan OAuth2 client secret. Never commit to git."
+    )
+    JANPARICHAY_REDIRECT_URI = lambda: EnvConfig.optional(
+        "JANPARICHAY_REDIRECT_URI", "http://localhost:8000/v1/auth/callback",
+        "OAuth2 redirect URI. Must match exactly what is registered at meripehchaan.gov.in."
+    )
+
 
 # ── Data-Derived Constants (computed at training time, loaded at runtime) ──
 class ModelConfig:
@@ -252,6 +281,11 @@ FIELD_QUERIES = {
 SOURCE_DECAY = {
     "naukri": 0.020,
     "linkedin": 0.020,
-    "indeed": 0.025,
     "datagov": 0.001
+}
+
+SOURCE_WEIGHTS = {
+    "naukri":  0.45,
+    "linkedin": 0.45,
+    "datagov": 0.10,
 }

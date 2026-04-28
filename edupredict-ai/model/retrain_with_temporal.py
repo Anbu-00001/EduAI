@@ -23,15 +23,16 @@ from model.mlflow_tracking import log_training_run, register_model
 from model.monitoring import save_training_stats
 from model.fairness import audit_fairness
 from model.generate_model_card import generate_model_card
+from model.data_builder import map_programme_to_field, generate_artifact_hashes
 
 logger = logging.getLogger(__name__)
 
-FEATURE_COLS_V4 = [
+FEATURE_COLS_V5 = [
     "cgpa_normalized", "internships_count", "backlogs",
     "median_salary_normalized", "potential_score", "demand_proxy",
     "placement_rate_for_field", "demand_velocity_per_day",
     "demand_acceleration", "velocity_r_squared", "demand_momentum", 
-    "market_hhi", "macro_index"
+    "market_hhi", "macro_index", "backlogs_missing"
 ]
 
 RANDOM_STATE_SPLIT_1 = 42
@@ -56,11 +57,11 @@ def retrain():
         df = pd.read_csv(features_path)
     
     if "field" not in df.columns:
-        if "field_of_study" in df.columns:
-            df["field"] = df["field_of_study"]
-        else:
-            fields = list(FIELD_QUERIES.keys())
-            df["field"] = np.random.choice(fields, len(df))
+        for col in ["programme", "field_of_study", "degree"]:
+            if col in df.columns:
+                df["field"] = df[col].apply(map_programme_to_field)
+                break
+        df = df.dropna(subset=["field"])
     
     # Macro Index
     macro_idx = compute_macro_index()
@@ -72,7 +73,7 @@ def retrain():
     df = add_temporal_features(df, velocity_df, demand_df)
     
     # 2. 3-Way Split (Train, Cal, Test) to prevent leakage
-    available_features = [col for col in FEATURE_COLS_V4 if col in df.columns]
+    available_features = [col for col in FEATURE_COLS_V5 if col in df.columns]
     X = df[available_features]
     y = df["repaid_loan"]
     
@@ -215,6 +216,9 @@ def retrain():
     
     # 11. Model Card
     generate_model_card()
+    
+    # 12. Integrity
+    generate_artifact_hashes(ARTIFACTS_DIR)
     
     logger.info("✅ Phase 4 Retraining Complete")
     for k, v in metrics.items():

@@ -1,13 +1,13 @@
 {
-  "stacked_ensemble_auc": 0.7945302581658338,
-  "graph_regularised_auc": 0.7867,
-  "auc_improvement": 0.1667,
+  "stacked_ensemble_auc": 0.8141967167949014,
+  "graph_regularised_auc": 0.8265,
+  "auc_improvement": 0.2065,
   "baseline_cibil_auc": 0.62,
-  "pre_calibration_ece": 0.0259,
-  "post_calibration_ece": 0.0258,
-  "conformal_q_hat": 0.6714,
-  "train_size": 6000,
-  "n_features_v4": 13,
+  "pre_calibration_ece": 0.0121,
+  "post_calibration_ece": 0.0098,
+  "conformal_q_hat": 0.1111,
+  "train_size": 4800,
+  "n_features_v4": 14,
   "feature_cols_v3": [
     "cgpa_normalized",
     "internships_count",
@@ -21,7 +21,8 @@
     "velocity_r_squared",
     "demand_momentum",
     "market_hhi",
-    "macro_index"
+    "macro_index",
+    "backlogs_missing"
   ],
   "model_version": "v4.0-production"
 }

@@ -19,6 +19,7 @@ from model.loan_roi import compute_loan_roi, LoanROIReport
 from model.field_ranker import rank_fields
 from model.skill_gap import generate_skill_gap_report
 from model.college_roi import score_college
+from model.data_builder import safe_load_artifact, get_nirf_salary_norm
 
 # Prometheus
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -75,19 +76,16 @@ async def lifespan(app: FastAPI):
     
     # Initialize Demo Tenant & API Key for Dashboard
     async with app.state.db_pool.acquire() as conn:
-        demo_key = "ep_demo_dashboard_key_2026"
-        key_hash = hash_api_key(demo_key)
-        await conn.execute("""
-            INSERT INTO api_keys (tenant_id, key_hash, rate_limit_rpm, active)
-            VALUES ('demo_lender', $1, 1000, TRUE)
-            ON CONFLICT (key_hash) DO NOTHING
-        """, key_hash)
+        # Initialize Demo Tenant (API Key should be seeded via script/DB directly)
+        # Removing hardcoded key seeding for Phase 5 security
+        pass
     
     base_path = "model/artifacts/"
     try:
-        app.state.meta_model = pickle.load(open(base_path + "meta_model.pkl", "rb"))
-        app.state.base_models = pickle.load(open(base_path + "base_models.pkl", "rb"))
-        app.state.scaler = pickle.load(open(base_path + "scaler.pkl", "rb"))
+        hashes = json.load(open(base_path + "artifact_hashes.json"))
+        app.state.meta_model = safe_load_artifact(base_path + "meta_model.pkl", hashes)
+        app.state.base_models = safe_load_artifact(base_path + "base_models.pkl", hashes)
+        app.state.scaler = safe_load_artifact(base_path + "scaler.pkl", hashes)
         app.state.calibration = json.load(open(base_path + "calibration_params.json"))
         app.state.conformal_qhat = json.load(open(base_path + "conformal_params.json"))["q_hat"]
         app.state.feature_ranges = json.load(open(base_path + "feature_ranges.json"))
@@ -125,7 +123,7 @@ Instrumentator().instrument(app).expose(app)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=EnvConfig.ALLOWED_ORIGINS().split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -144,7 +142,7 @@ class StudentProfile(BaseModel):
     college_placement_rate: float = Field(..., ge=0.0, le=100.0)
     loan_amount_inr: float = Field(..., ge=10000.0)
     annual_family_income_inr: Optional[float] = Field(None, ge=0)
-    user_hash: Optional[str] = None # For DPDP consent check
+    user_hash: Optional[str] = Field(None, validate_default=True) # For DPDP consent check
     
     @field_validator("field_of_study")
     @classmethod
@@ -153,6 +151,20 @@ class StudentProfile(BaseModel):
         valid = list(FIELD_QUERIES.keys())
         if v not in valid:
             raise ValueError(f"field_of_study must be one of {valid}")
+        return v
+
+    @field_validator("loan_amount_inr")
+    @classmethod
+    def validate_loan(cls, v):
+        if v > 5_000_000:
+            raise ValueError("loan_amount_inr capped at ₹50,00,000 for advisory mode")
+        return v
+
+    @field_validator("user_hash")
+    @classmethod
+    def validate_consent(cls, v):
+        if not v:
+            raise ValueError("user_hash (DPDP Consent) is mandatory for v5.0 assess")
         return v
 
 class ConsentRequest(BaseModel):
@@ -195,9 +207,9 @@ def build_features(profile: StudentProfile, demand_lookup: dict, velocity_lookup
     cgpa_norm = profile.cgpa / 10.0
     internship_weight = min(profile.internships_count / 3.0, 1.0)
     demand_proxy = demand_lookup.get(profile.field_of_study, 0.5)
-    salary_norm = demand_proxy 
+    salary_norm = get_nirf_salary_norm(profile.field_of_study)
     placement_rate_norm = profile.college_placement_rate / 100.0
-    potential_score = (0.25 * cgpa_norm + 0.25 * internship_weight + 0.25 * placement_rate_norm + 0.25 * demand_proxy)
+    potential_score = (0.35 * cgpa_norm + 0.25 * internship_weight + 0.25 * placement_rate_norm + 0.15 * salary_norm)
     v_data = velocity_lookup.get(profile.field_of_study, {"velocity": 0.0, "accel": 0.0, "r2": 0.0})
     v_scaled = np.clip((v_data["velocity"] + 50) / 100, 0, 1)
     
@@ -210,7 +222,7 @@ def build_features(profile: StudentProfile, demand_lookup: dict, velocity_lookup
         cgpa_norm, profile.internships_count, profile.backlogs,
         salary_norm, potential_score, demand_proxy,
         placement_rate_norm, v_data["velocity"], v_data["accel"],
-        v_data["r2"], momentum, market_hhi, macro_index
+        v_data["r2"], momentum, market_hhi, macro_index, 0
     ])
 
 def generate_adverse_action_notice(shap_contributions: dict, risk_tier: str) -> Optional[dict]:
@@ -256,7 +268,7 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
     feature_names = app.state.metrics.get("feature_cols_v3", [
         "cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized",
         "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day",
-        "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index"
+        "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index", "backlogs_missing"
     ])
     
     features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
