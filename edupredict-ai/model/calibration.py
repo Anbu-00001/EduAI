@@ -28,7 +28,6 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.calibration import calibration_curve
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
-import pickle
 import logging
 
 logger = logging.getLogger(__name__)
@@ -45,6 +44,9 @@ def isotonic_calibrate(
     
     PAV algorithm ensures: if s_i < s_j then f(s_i) ≤ f(s_j)
     This is the correct inductive bias for probability calibration.
+    
+    out_of_bounds="clip" is used because labels are binary {0,1},
+    so clipping to [min_y, max_y] correctly enforces valid probabilities.
     
     Returns: (calibrated_test_probs, fitted_isotonic_model)
     """
@@ -89,6 +91,9 @@ def select_best_calibrator(
     Select whichever achieves lower ECE on the validation set.
     This is the correct model selection procedure for calibrators.
     
+    After selection, refits the chosen model on the FULL calibration
+    dataset (train + val) to maximize data efficiency.
+    
     Returns: (best_calibrator, method_name, best_ece)
     """
     # Isotonic
@@ -103,14 +108,20 @@ def select_best_calibrator(
 
     logger.info(f"Calibration ECE — Isotonic: {ece_iso:.4f}, Platt: {ece_platt:.4f}")
 
+    # Combine full cal set for final refit
+    full_raw = np.concatenate([raw_probs_cal, raw_probs_val])
+    full_y = np.concatenate([y_cal, y_val])
+
     if ece_iso <= ece_platt:
         logger.info("Selected: Isotonic Regression")
-        return ir, "isotonic", ece_iso
+        # Refit isotonic on full cal set
+        ir_final = IsotonicRegression(out_of_bounds="clip", increasing=True)
+        ir_final.fit(full_raw, full_y)
+        return ir_final, "isotonic", ece_iso
     else:
-        A, B = platt_params["A"], platt_params["B"]
-        # Refit on full cal set
-        p_platt_full, params = platt_calibrate(raw_probs_cal, y_cal, raw_probs_cal)
         logger.info("Selected: Platt Scaling")
+        # Refit platt on full cal set
+        _, params = platt_calibrate(full_raw, full_y, full_raw)
         return params, "platt", ece_platt
 
 
@@ -118,6 +129,9 @@ def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 15) -> floa
     """
     ECE with 15 equal-width bins (more resolution than default 10).
     ECE = Σ_b (|B_b|/n) * |acc(B_b) - conf(B_b)|
+    
+    Bins with 0 samples are skipped. The sum of (|B_b|/n) over 
+    all non-empty bins is exactly 1.0, which is mathematically correct.
     """
     bin_edges = np.linspace(0, 1, n_bins + 1)
     ece = 0.0
@@ -142,30 +156,32 @@ def plot_reliability_diagram(
     """Reliability diagram comparing raw vs calibrated probabilities."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-    for probs, label, color, ax in [
-        (raw_probs, "Raw ensemble", "#E24B4A", ax1),
-        (calibrated_probs, f"Calibrated ({method_name})", "#1D9E75", ax1),
-    ]:
-        frac_pos, mean_pred = calibration_curve(y_true, probs, n_bins=15)
-        ece = compute_ece(probs, y_true)
-        ax.plot(mean_pred, frac_pos, "o-", label=f"{label} (ECE={ece:.4f})",
-                color=color)
+    try:
+        for probs, label, color, ax in [
+            (raw_probs, "Raw ensemble", "#E24B4A", ax1),
+            (calibrated_probs, f"Calibrated ({method_name})", "#1D9E75", ax1),
+        ]:
+            frac_pos, mean_pred = calibration_curve(y_true, probs, n_bins=15)
+            ece = compute_ece(probs, y_true)
+            ax.plot(mean_pred, frac_pos, "o-", label=f"{label} (ECE={ece:.4f})",
+                    color=color)
 
-    ax1.plot([0, 1], [0, 1], "k--", linewidth=0.8, label="Perfect calibration")
-    ax1.set_xlabel("Mean predicted probability")
-    ax1.set_ylabel("Fraction of positives")
-    ax1.set_title("Reliability Diagram")
-    ax1.legend(fontsize=8)
-    ax1.grid(True, alpha=0.3)
+        ax1.plot([0, 1], [0, 1], "k--", linewidth=0.8, label="Perfect calibration")
+        ax1.set_xlabel("Mean predicted probability")
+        ax1.set_ylabel("Fraction of positives")
+        ax1.set_title("Reliability Diagram")
+        ax1.legend(fontsize=8)
+        ax1.grid(True, alpha=0.3)
 
-    # Histogram of calibrated probabilities
-    ax2.hist(calibrated_probs, bins=30, edgecolor="white", color="#1D9E75", alpha=0.8)
-    ax2.set_xlabel("Calibrated probability")
-    ax2.set_ylabel("Count")
-    ax2.set_title("Distribution of Calibrated Scores")
-    ax2.grid(True, alpha=0.3)
+        # Histogram of calibrated probabilities
+        ax2.hist(calibrated_probs, bins=30, edgecolor="white", color="#1D9E75", alpha=0.8)
+        ax2.set_xlabel("Calibrated probability")
+        ax2.set_ylabel("Count")
+        ax2.set_title("Distribution of Calibrated Scores")
+        ax2.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    logger.info(f"Reliability diagram saved: {save_path}")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        logger.info(f"Reliability diagram saved: {save_path}")
+    finally:
+        plt.close(fig)

@@ -2,66 +2,95 @@ import pytest
 import numpy as np
 import sys, os, time, json
 import pandas as pd
+from fastapi.testclient import TestClient
 
 # Add project to path
 sys.path.append(os.getcwd())
 
+from app.api.main import app
 from model.conformal import ConformalPredictor
-from model.fairness import audit_fairness
-from model.calibration import compute_ece, platt_calibrate, isotonic_calibrate, select_best_calibrator
+from model.fairness import audit_fairness, apply_fairness_constraint
+from model.drift import compute_psi
+from model.loan_roi import compute_loan_roi
+from model.skill_gap import generate_skill_gap_report
+from config import EnvConfig, DomainConstants
 
-def test_conformal_coverage_guarantee():
-    rng = np.random.default_rng(0)
-    probs_cal = rng.uniform(0, 1, 200)
-    labels_cal = (rng.uniform(0, 1, 200) < probs_cal).astype(int)
-    probs_test = rng.uniform(0, 1, 500)
-    labels_test = (rng.uniform(0, 1, 500) < probs_test).astype(int)
-    
+client = TestClient(app)
+
+def test_config_resolution():
+    assert EnvConfig.DATABASE_URL() is not None
+
+def test_api_health():
+    response = client.get("/v1/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "version": "5.0.0"}
+
+def test_conformal_empty_data():
     cp = ConformalPredictor(alpha=0.10)
-    cp.calibrate(probs_cal, labels_cal)
-    coverage = cp.coverage_check(probs_test, labels_test)
-    assert coverage["empirical_coverage"] >= 0.85 # Allow slight variance
+    with pytest.raises(Exception):
+        cp.calibrate(np.array([]), np.array([]))
 
-def test_calibration_selection():
-    rng = np.random.default_rng(42)
-    raw_cal = rng.beta(2, 5, 200)
-    y_cal = (rng.uniform(size=200) < raw_cal * 0.7).astype(int)
-    raw_val = rng.beta(2, 5, 100)
-    y_val = (rng.uniform(size=100) < raw_val * 0.7).astype(int)
-    
-    calibrator, method, ece = select_best_calibrator(raw_cal, y_cal, raw_val, y_val)
-    assert method in ["platt", "isotonic"]
-    assert ece >= 0.0
-
-def test_fairness_audit_structure():
+def test_fairness_audit_robustness():
+    # Test with valid groups
     df = pd.DataFrame({
-        "repaid_loan": np.random.randint(0, 2, 100),
-        "field": np.random.choice(["A", "B"], 100)
+        "repaid_loan": [1, 1, 0, 0, 1, 0],
+        "gender": ["M", "M", "F", "F", "F", "M"]
     })
-    probs = np.random.uniform(0, 1, 100)
-    report = audit_fairness(df, probs, "field")
+    probs = np.array([0.9, 0.8, 0.2, 0.3, 0.85, 0.1])
+    report = audit_fairness(df, probs, "gender")
     assert "demographic_parity_index" in report
-    assert "group_metrics" in report
-    assert len(report["group_metrics"]) == 2
+    
+    # Test apply_fairness_constraint
+    _, thresholds = apply_fairness_constraint(probs, df["gender"].values, target_dpi=0.95)
+    assert "M" in thresholds and "F" in thresholds
 
-def test_macro_index_default():
-    from model.temporal_features import compute_macro_index
-    idx = compute_macro_index("invalid_key")
-    assert 0.0 <= idx <= 1.0
+def test_drift_empty_data():
+    # Empty data should not throw ZeroDivisionError
+    ref = np.array([])
+    curr = np.array([])
+    psi = compute_psi(ref, curr)
+    assert psi == 0.0
 
-def test_api_log_structure():
-    # Verify monitoring DB tables are created
-    from model.monitoring import _save_drift_report
-    import sqlite3
-    report = {
-        "checked_at": time.time(),
-        "n_new_samples": 10,
-        "retrain_recommended": 0,
-        "retrain_reasons": [],
-        "jsd": 0.05
+def test_loan_roi_math():
+    roi = compute_loan_roi(
+        field="computer_science",
+        loan_amount_inr=1000000,
+        annual_interest_rate=0.10,
+        tenure_years=5,
+        starting_salary_norm=0.8,
+        repayment_probability=0.85
+    )
+    assert roi.loan_amount_inr == 1000000
+    assert roi.tenure_months == 60
+    assert roi.emi_inr > 0
+    assert len(roi.salary_trajectory) == 5
+    assert len(roi.emi_to_salary_ratios) == 5
+    
+    # 10L loan over 5 years at 10% is ~21247/mo -> ~254k/yr
+    assert abs(roi.emi_inr - 21247) < 500 
+
+def test_skill_gap_priority():
+    features = np.zeros(13)
+    feature_names = ["cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized", "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day", "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index"]
+    
+    cf_result = {
+        "changes_required": {
+            "cgpa_normalized": {"original": 0.6, "counterfactual": 0.8, "change": 0.2},
+            "internships_count": {"original": 0, "counterfactual": 2, "change": 2}
+        }
     }
-    _save_drift_report(report)
-    conn = sqlite3.connect("data/monitoring.db")
-    res = conn.execute("SELECT count(*) FROM drift_reports").fetchone()
-    assert res[0] > 0
-    conn.close()
+    
+    def dummy_predict(x):
+        # simple mock
+        p = 0.5
+        if x[0][0] > 0.7: p += 0.15 # cgpa
+        if x[0][1] > 1: p += 0.10  # internship
+        return np.array([p])
+    
+    report = generate_skill_gap_report(
+        features, cf_result, dummy_predict, feature_names, 0.5, "computer_science", 0.72
+    )
+    
+    # Internships should probably be higher priority than CGPA due to effort scores
+    assert len(report.actions) == 2
+    assert report.actions[0].priority_score >= report.actions[1].priority_score

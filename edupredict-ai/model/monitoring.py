@@ -40,9 +40,10 @@ from scipy import stats as scipy_stats
 from typing import Optional
 import sqlite3
 
+from config import DomainConstants, MONITORING_DB
+
 logger = logging.getLogger(__name__)
 
-MONITORING_DB = Path("data/monitoring.db")
 TRAINING_STATS_PATH = Path("model/artifacts/training_feature_stats.json")
 
 
@@ -86,6 +87,9 @@ def compute_psi(expected: np.ndarray, actual: np.ndarray, n_bins: int = 10) -> f
     Uses training data percentiles as bin edges (not equal-width bins).
     Laplace smoothing prevents log(0).
     """
+    if len(expected) == 0 or len(actual) == 0:
+        return 0.0
+        
     bin_edges = np.nanpercentile(expected, np.linspace(0, 100, n_bins + 1))
     bin_edges = np.unique(bin_edges)
     if len(bin_edges) < 2:
@@ -95,14 +99,16 @@ def compute_psi(expected: np.ndarray, actual: np.ndarray, n_bins: int = 10) -> f
     act_counts = np.histogram(actual, bins=bin_edges)[0]
 
     eps = 0.5
-    exp_pct = (exp_counts + eps) / (len(expected) + eps * n_bins)
-    act_pct = (act_counts + eps) / (len(actual) + eps * n_bins)
+    exp_pct = (exp_counts + eps) / (len(expected) + eps * (len(bin_edges) - 1))
+    act_pct = (act_counts + eps) / (len(actual) + eps * (len(bin_edges) - 1))
 
     return float(np.sum((act_pct - exp_pct) * np.log(act_pct / exp_pct)))
 
 
 def compute_ks(expected: np.ndarray, actual: np.ndarray) -> tuple[float, float]:
     """Two-sample KS test. Returns (statistic, p-value)."""
+    if len(expected) == 0 or len(actual) == 0:
+        return 0.0, 1.0
     stat, pval = scipy_stats.ks_2samp(expected, actual)
     return float(stat), float(pval)
 
@@ -113,16 +119,44 @@ def compute_jsd(p_train_hist: np.ndarray, p_current: np.ndarray) -> float:
     JSD(P||Q) = 0.5 * KL(P||M) + 0.5 * KL(Q||M)  where M = 0.5*(P+Q)
     Uses histogram approximation with 20 bins in [0,1].
     """
+    if len(p_current) == 0 or p_train_hist.sum() == 0:
+        return 0.0
+        
     bins = np.linspace(0, 1, 21)
-    # p_train_hist is already a histogram (counts)
-    p_hist = p_train_hist.astype(float) + 1e-9
-    q_hist = np.histogram(p_current, bins=bins)[0].astype(float) + 1e-9
+    
+    p_hist = p_train_hist.astype(float)
+    q_hist = np.histogram(p_current, bins=bins)[0].astype(float)
+    
+    if p_hist.sum() == 0 or q_hist.sum() == 0:
+        return 0.0
+        
+    p_hist = p_hist + 1e-9
+    q_hist = q_hist + 1e-9
+    
     p_hist /= p_hist.sum()
     q_hist /= q_hist.sum()
+    
     m = 0.5 * (p_hist + q_hist)
     kl_pm = np.sum(p_hist * np.log(p_hist / m))
     kl_qm = np.sum(q_hist * np.log(q_hist / m))
     return float(0.5 * (kl_pm + kl_qm))
+
+
+def reconstruct_distribution_from_hist(counts: list, edges: list, n_samples: int = 1000) -> np.ndarray:
+    """Reconstruct an approximate distribution from histogram counts and edges."""
+    if sum(counts) == 0:
+        return np.array([])
+        
+    probs = np.array(counts) / sum(counts)
+    bin_indices = np.random.choice(len(counts), size=n_samples, p=probs)
+    
+    samples = []
+    for idx in bin_indices:
+        low = edges[idx]
+        high = edges[idx+1]
+        samples.append(np.random.uniform(low, high))
+        
+    return np.array(samples)
 
 
 def check_drift(
@@ -154,8 +188,8 @@ def check_drift(
         "retrain_reasons": [],
     }
 
-    psi_threshold_retrain = 0.25
-    psi_threshold_monitor = 0.10
+    psi_threshold_retrain = DomainConstants.PSI_RETRAIN_THRESHOLD
+    psi_threshold_monitor = DomainConstants.PSI_MONITOR_THRESHOLD
     ks_retrain_threshold = 0.01
 
     for feat in feature_names:
@@ -163,13 +197,17 @@ def check_drift(
             continue
 
         b = baseline[feat]
-        # Reconstruct approximate training distribution for PSI/KS
-        train_vals = np.random.normal(
-            b["mean"], max(b["std"], 1e-9), 1000
+        
+        # Reconstruct approximate training distribution from histogram
+        train_vals = reconstruct_distribution_from_hist(
+            b["histogram_counts"], 
+            b["histogram_edges"], 
+            n_samples=1000
         )
+        
         new_vals = new_feature_data[feat].dropna().values
 
-        if len(new_vals) < 10:
+        if len(new_vals) < 10 or len(train_vals) < 10:
             continue
 
         psi = compute_psi(train_vals, new_vals)

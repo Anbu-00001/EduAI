@@ -3,14 +3,17 @@ import json
 import pickle
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import shap
 import logging
+import shap
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
+from pathlib import Path
 
 # Phase 4 Imports
+from config import EnvConfig, ARTIFACTS_DIR, PIPELINE_DIR, FIELD_QUERIES
+import logging_config
+
 from data.pipeline.dag import get_demand_data
 from model.temporal_features import compute_demand_velocity, add_temporal_features, build_peer_cohort_graph, tune_graph_alpha, compute_macro_index
 from model.ensemble import train_stacked_ensemble
@@ -31,25 +34,36 @@ FEATURE_COLS_V4 = [
     "market_hhi", "macro_index"
 ]
 
+RANDOM_STATE_SPLIT_1 = 42
+RANDOM_STATE_SPLIT_2 = 99
+
 def retrain():
-    print("🚀 Starting Phase 4: Production Grade Retraining Pipeline...")
-    os.makedirs("model/artifacts", exist_ok=True)
+    logger.info("🚀 Starting Phase 4: Production Grade Retraining Pipeline...")
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     
     # 1. Load and Augment Data
-    features_path = "data/processed/features.csv"
-    if not os.path.exists(features_path):
+    features_path = Path("data/processed/features.csv")
+    if not features_path.exists():
         from model.feature_engineering import build_master_dataset
+        logger.info("Building master dataset from raw data...")
         df = build_master_dataset("data/raw")
+        if df is None or df.empty:
+            if features_path.exists():
+                df = pd.read_csv(features_path)
+            else:
+                raise RuntimeError("build_master_dataset failed to produce data and features.csv not found.")
     else:
         df = pd.read_csv(features_path)
     
     if "field" not in df.columns:
-        from data.pipeline.dag import FIELD_QUERIES
-        fields = list(FIELD_QUERIES.keys())
-        df["field"] = np.random.choice(fields, len(df))
+        if "field_of_study" in df.columns:
+            df["field"] = df["field_of_study"]
+        else:
+            fields = list(FIELD_QUERIES.keys())
+            df["field"] = np.random.choice(fields, len(df))
     
     # Macro Index
-    macro_idx = compute_macro_index(os.environ.get("DATAGOV_API_KEY", ""))
+    macro_idx = compute_macro_index()
     df["macro_index"] = macro_idx
     
     # Temporal features
@@ -57,22 +71,49 @@ def retrain():
     velocity_df = compute_demand_velocity()
     df = add_temporal_features(df, velocity_df, demand_df)
     
-    # 2. Split (75/25 for larger cal set as requested)
-    X = df[FEATURE_COLS_V4]
+    # 2. 3-Way Split (Train, Cal, Test) to prevent leakage
+    available_features = [col for col in FEATURE_COLS_V4 if col in df.columns]
+    X = df[available_features]
     y = df["repaid_loan"]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+    
+    # First split: train+cal vs test (80/20)
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=RANDOM_STATE_SPLIT_1, stratify=y
+    )
+    
+    # Second split: train vs cal (75/25 of the 80% -> 60% train, 20% cal)
+    X_train_m, X_cal, y_train_m, y_cal = train_test_split(
+        X_temp, y_temp, test_size=0.25, random_state=RANDOM_STATE_SPLIT_2, stratify=y_temp
+    )
+    
+    # Explicit data leakage prevention with assertion
+    assert not any(
+        col in X_test.columns
+        for col in ["repaid_loan", "target", "label"]
+    ), "Target column leaked into test features"
     
     # 3. Scaling
     scaler = StandardScaler()
-    X_train_sc = pd.DataFrame(scaler.fit_transform(X_train), columns=FEATURE_COLS_V4)
-    X_test_sc = pd.DataFrame(scaler.transform(X_test), columns=FEATURE_COLS_V4)
+    X_train_sc = pd.DataFrame(
+        scaler.fit_transform(X_train_m),  # fit ONLY on train_m
+        columns=available_features
+    )
+    # These must use transform, never fit_transform
+    X_cal_sc = pd.DataFrame(scaler.transform(X_cal), columns=available_features)
+    X_test_sc = pd.DataFrame(scaler.transform(X_test), columns=available_features)
     
-    pickle.dump(scaler, open("model/artifacts/scaler.pkl", "wb"))
-    np.save("model/artifacts/X_train_sc.npy", X_train_sc.values)
-    np.save("model/artifacts/y_train.npy", y_train.values)
+    logger.info(
+        f"Splits — train: {len(X_train_m)}, cal: {len(X_cal)}, test: {len(X_test)}"
+        f" | Class balance train: {y_train_m.mean():.3f}, "
+        f"cal: {y_cal.mean():.3f}, test: {y_test.mean():.3f}"
+    )
+    
+    pickle.dump(scaler, open(ARTIFACTS_DIR / "scaler.pkl", "wb"))
+    np.save(ARTIFACTS_DIR / "X_train_sc.npy", X_train_sc.values)
+    np.save(ARTIFACTS_DIR / "y_train.npy", y_train_m.values)
     
     # 4. Ensemble Training
-    base_models, meta_model, oof_auc, p_model_oof = train_stacked_ensemble(X_train_sc, y_train)
+    base_models, meta_model, oof_auc, p_model_oof = train_stacked_ensemble(X_train_sc, y_train_m)
     
     def get_ensemble_prob(X_data):
         xp = np.mean([m.predict_proba(X_data)[:, 1] for m in base_models["xgb"]], axis=0)
@@ -81,18 +122,26 @@ def retrain():
         mi = np.column_stack([xp, lp, cp])
         return meta_model.predict_proba(mi)[:, 1]
     
+    p_model_cal = get_ensemble_prob(X_cal_sc)
     p_model_test = get_ensemble_prob(X_test_sc)
     
     # 5. Graph Regularisation
-    p_cohort_oof = build_peer_cohort_graph(X_train_sc.values, y_train.values, X_train_sc.values)
-    p_cohort_test = build_peer_cohort_graph(X_train_sc.values, y_train.values, X_test_sc.values)
-    alpha = tune_graph_alpha(p_model_oof, p_cohort_oof, y_train.values)
-    p_blended_oof = alpha * p_model_oof + (1 - alpha) * p_cohort_oof
+    # p_model_oof is from CV on train_m. We don't really have peer cohort oof naturally unless we do CV for it too.
+    # We will build peer cohort graph for cal and test using train_m.
+    p_cohort_cal = build_peer_cohort_graph(X_train_sc.values, y_train_m.values, X_cal_sc.values)
+    p_cohort_test = build_peer_cohort_graph(X_train_sc.values, y_train_m.values, X_test_sc.values)
+    
+    # We need to tune alpha. Since we want to use train_m to tune alpha, we can do it on the cal set.
+    # Wait, the instruction says tune_graph_alpha takes p_model, p_cohort, y_true.
+    alpha = tune_graph_alpha(p_model_cal, p_cohort_cal, y_cal.values)
+    
+    p_blended_cal = alpha * p_model_cal + (1 - alpha) * p_cohort_cal
     p_blended_test = alpha * p_model_test + (1 - alpha) * p_cohort_test
     
-    # 6. Isotonic Calibration (using 25% of OOF for calibration selection)
+    # 6. Calibration
+    # We use the calibration set for Isotonic/Platt. We can further split cal into cal_train and cal_val to select.
     p_cal_train, p_cal_val, y_cal_train, y_cal_val = train_test_split(
-        p_blended_oof, y_train.values, test_size=0.25, random_state=42
+        p_blended_cal, y_cal.values, test_size=0.33, random_state=42
     )
     calibrator, method_name, val_ece = select_best_calibrator(p_cal_train, y_cal_train, p_cal_val, y_cal_val)
     
@@ -106,55 +155,71 @@ def retrain():
 
     ece_pre = compute_ece(p_blended_test, y_test.values)
     ece_post = compute_ece(calibrated_test, y_test.values)
-    plot_reliability_diagram(p_blended_test, calibrated_test, y_test.values, method_name, "model/artifacts/reliability_v4.png")
+    plot_reliability_diagram(p_blended_test, calibrated_test, y_test.values, method_name, str(ARTIFACTS_DIR / "reliability_v4.png"))
     
     # 7. Conformal Prediction
+    # We need a separate calibration set for conformal. We can split the test set or reuse the cal set. 
+    # Let's use the remaining part of cal set or split test set.
+    # Standard practice: Conformal calibration set should be separate from Platt calibration set.
+    # We will just split calibrated_test into conformal_cal and final_test, or use val_cal.
+    # Let's split test set in half just like original.
     cp = ConformalPredictor(alpha=0.10)
-    q_hat = cp.calibrate(calibrated_test[:len(calibrated_test)//2], y_test.values[:len(calibrated_test)//2])
-    coverage = cp.coverage_check(calibrated_test[len(calibrated_test)//2:], y_test.values[len(calibrated_test)//2:])
+    split_idx = len(calibrated_test) // 2
+    q_hat = cp.calibrate(calibrated_test[:split_idx], y_test.values[:split_idx])
+    coverage = cp.coverage_check(calibrated_test[split_idx:], y_test.values[split_idx:])
     
     # 8. Fairness & SHAP
+    # We use the full test set dataframe for fairness audit
     fairness_report = audit_fairness(df.loc[X_test.index], calibrated_test, "field")
     explainer = shap.TreeExplainer(base_models["xgb"][0])
     shap_vals = explainer.shap_values(X_test_sc)
     
     # 9. Save Artifacts
-    json.dump(cal_params, open("model/artifacts/calibration_params.json", "w"), indent=2)
-    json.dump({"q_hat": q_hat, **coverage}, open("model/artifacts/conformal_params.json", "w"), indent=2)
-    json.dump(fairness_report, open("model/artifacts/fairness_report.json", "w"), indent=2)
-    feature_ranges = {col: [float(X[col].min()), float(X[col].max())] for col in FEATURE_COLS_V4}
-    json.dump(feature_ranges, open("model/artifacts/feature_ranges.json", "w"), indent=2)
-    json.dump({"alpha": alpha}, open("model/artifacts/graph_params.json", "w"), indent=2)
+    json.dump(cal_params, open(ARTIFACTS_DIR / "calibration_params.json", "w"), indent=2)
+    json.dump({"q_hat": q_hat, **coverage}, open(ARTIFACTS_DIR / "conformal_params.json", "w"), indent=2)
+    json.dump(fairness_report, open(ARTIFACTS_DIR / "fairness_report.json", "w"), indent=2)
+    feature_ranges = {col: [float(X[col].min()), float(X[col].max())] for col in available_features}
+    json.dump(feature_ranges, open(ARTIFACTS_DIR / "feature_ranges.json", "w"), indent=2)
+    json.dump({"alpha": alpha}, open(ARTIFACTS_DIR / "graph_params.json", "w"), indent=2)
     
+    if len(np.unique(y_test)) > 1:
+        test_auc = roc_auc_score(y_test, calibrated_test)
+    else:
+        test_auc = 0.0
+
     metrics = {
-        "stacked_ensemble_auc": round(oof_auc, 4),
-        "graph_regularised_auc": round(roc_auc_score(y_test, calibrated_test), 4),
-        "auc_improvement": round(roc_auc_score(y_test, calibrated_test) - 0.62, 4),
+        "stacked_ensemble_auc": float(oof_auc) if not np.isnan(oof_auc) else 0.0,
+        "graph_regularised_auc": float(round(test_auc, 4)),
+        "auc_improvement": float(round(test_auc - 0.62, 4)),
         "baseline_cibil_auc": 0.62,
-        "pre_calibration_ece": round(ece_pre, 4),
-        "post_calibration_ece": round(ece_post, 4),
-        "conformal_q_hat": round(q_hat, 4),
-        "train_size": len(X_train),
-        "n_features_v4": len(FEATURE_COLS_V4),
+        "pre_calibration_ece": float(round(ece_pre, 4)),
+        "post_calibration_ece": float(round(ece_post, 4)),
+        "conformal_q_hat": float(round(q_hat, 4)),
+        "train_size": len(X_train_m),
+        "n_features_v4": len(available_features),
+        "feature_cols_v3": available_features,  # For compatibility with ModelConfig
         "model_version": "v4.0-production"
     }
-    json.dump(metrics, open("model/artifacts/metrics.json", "w"), indent=2)
+    json.dump(metrics, open(ARTIFACTS_DIR / "metrics.json", "w"), indent=2)
     
     # 10. Monitoring Stats & MLflow
-    save_training_stats(X_train_sc.values, FEATURE_COLS_V4, p_blended_oof)
+    # Wait, save_training_stats requires predictions. We use p_model_oof from train_m.
+    save_training_stats(X_train_sc.values, available_features, p_model_oof)
     
     run_id = log_training_run(
         metrics, base_models, meta_model, scaler, calibrator, method_name,
-        alpha, FEATURE_COLS_V4, {"q_hat": q_hat, **coverage}, fairness_report
+        alpha, available_features, {"q_hat": q_hat, **coverage}, fairness_report,
+        artifact_dir=str(ARTIFACTS_DIR)
     )
     register_model(run_id)
     
     # 11. Model Card
     generate_model_card()
     
-    print("\n✅ Phase 4 Retraining Complete")
+    logger.info("✅ Phase 4 Retraining Complete")
     for k, v in metrics.items():
-        print(f"  {k}: {v}")
+        logger.info(f"  {k}: {v}")
 
 if __name__ == "__main__":
+    logging_config.configure_logging()
     retrain()

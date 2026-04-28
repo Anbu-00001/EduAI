@@ -1,11 +1,8 @@
 import streamlit as st
-import pickle
 import json
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import shap
 import os
+import requests
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="EduPredict AI — Lender's Command Center",
@@ -13,167 +10,148 @@ st.set_page_config(
     layout="wide"
 )
 
-@st.cache_resource
-def load_model():
-    model = pickle.load(open("edupredict-ai/model/artifacts/model.pkl", "rb"))
-    scaler = pickle.load(open("edupredict-ai/model/artifacts/scaler.pkl", "rb"))
-    return model, scaler
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
+API_KEY = "ep_demo_dashboard_key_2026"
 
 @st.cache_data
 def load_metrics():
-    with open("edupredict-ai/model/artifacts/metrics.json") as f:
-        return json.load(f)
+    try:
+        with open("model/artifacts/metrics.json") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-# Wait until artifacts exist
-if os.path.exists("edupredict-ai/model/artifacts/model.pkl") and os.path.exists("edupredict-ai/model/artifacts/metrics.json"):
-    model, scaler = load_model()
-    metrics = load_metrics()
+metrics = load_metrics()
 
-    # ── Header ──────────────────────────────────────────────────
-    st.title("🎓 EduPredict AI")
-    st.subheader("Lender's Command Center — Future Earning Potential Engine")
-    st.markdown("---")
+# ── Header ──────────────────────────────────────────────────
+st.title("🎓 EduPredict AI")
+st.subheader("Lender's Command Center — Future Earning Potential Engine")
+st.markdown("---")
 
+if metrics:
     # ── Metric Cards (top row) ──────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Model AUC", f"{metrics['test_auc']:.4f}", 
-                delta=f"+{metrics['test_auc'] - metrics['baseline_auc_cibil_only']:.4f} vs CIBIL baseline")
+        st.metric("Model AUC (Graph)", f"{metrics.get('graph_regularised_auc', 0):.4f}", 
+                delta=f"+{metrics.get('auc_improvement', 0):.4f} vs CIBIL")
     with col2:
-        st.metric("CV AUC (5-fold)", f"{metrics['cv_auc_mean']:.4f}",
-                delta=f"±{metrics['cv_auc_std']:.4f}")
+        st.metric("Ensemble AUC", f"{metrics.get('stacked_ensemble_auc', 0):.4f}")
     with col3:
-        st.metric("Training Samples", f"{metrics['train_size']:,}")
+        st.metric("Training Samples", f"{metrics.get('train_size', 0):,}")
     with col4:
-        st.metric("Test Samples", f"{metrics['test_size']:,}")
+        st.metric("Feature Set", f"v{metrics.get('n_features_v4', 13)}")
+else:
+    st.warning("Model metrics not found. Ensure training pipeline has run.")
 
-    st.markdown("---")
+st.markdown("---")
 
-    # ── Main layout: Input | Result ─────────────────────────────
-    left, right = st.columns([1, 1.2])
+# ── Links to Monitoring ─────────────────────────────────────
+st.markdown("### 📊 System Monitoring & Observability")
+st.markdown(
+    "Monitor live model performance, drift, and fairness metrics:  \n"
+    "- **Grafana Dashboard:** [http://localhost:3000](http://localhost:3000) *(User: admin, Pass: edupredict)*  \n"
+    "- **Prometheus Metrics:** [http://localhost:9090](http://localhost:9090)  \n"
+    "- **FastAPI Backend (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)"
+)
+st.markdown("---")
 
-    with left:
-        st.subheader("📋 Student Profile")
-        
-        st.markdown("**Academic Background**")
-        cgpa = st.slider("CGPA (on 10-point scale)", 4.0, 10.0, 7.5, 0.1)
-        backlogs = st.slider("Academic Backlogs", 0, 8, 0)
-        
-        st.markdown("**Experience**")
-        internships = st.slider("Number of Internships", 0, 6, 2)
-        projects = st.slider("Projects / Hackathons", 0, 10, 3)
-        
-        st.markdown("**Field & Placement Context**")
-        field_demand = st.selectbox(
-            "Degree Field",
-            options=[
-                "Computer Science / IT",
-                "Data Science / AI",
-                "MBA / Finance",
-                "Mechanical Engineering",
-                "Electrical Engineering",
-                "Civil Engineering",
-                "Biotechnology / Life Sciences",
-            ]
-        )
-        DEMAND_MAP = {
-            "Computer Science / IT": 0.95,
-            "Data Science / AI": 0.90,
-            "MBA / Finance": 0.65,
-            "Mechanical Engineering": 0.55,
-            "Electrical Engineering": 0.50,
-            "Civil Engineering": 0.35,
-            "Biotechnology / Life Sciences": 0.25,
+# ── Main layout: Input | Result ─────────────────────────────
+left, right = st.columns([1, 1.2])
+
+with left:
+    st.subheader("📋 Student Profile")
+    
+    st.markdown("**Academic Background**")
+    cgpa = st.slider("CGPA (on 10-point scale)", 4.0, 10.0, 7.5, 0.1)
+    backlogs = st.slider("Academic Backlogs", 0, 8, 0)
+    
+    st.markdown("**Experience**")
+    internships = st.slider("Number of Internships", 0, 6, 2)
+    
+    st.markdown("**Field & Placement Context**")
+    # API expects snake_case for field_of_study matching the model categories
+    FIELD_MAP = {
+        "Computer Science / IT": "computer_science",
+        "Data Science / AI": "data_science",
+        "MBA / Finance": "mba_finance",
+        "Mechanical Engineering": "mechanical_engineering",
+        "Electrical Engineering": "electrical_engineering",
+        "Civil Engineering": "civil_engineering",
+        "Biotechnology / Life Sciences": "biotechnology"
+    }
+    field_display = st.selectbox("Degree Field", options=list(FIELD_MAP.keys()))
+    field_slug = FIELD_MAP[field_display]
+    
+    college_placement_rate = st.slider("College Placement Rate (%)", 20, 100, 75)
+    
+    st.markdown("**Financial Context**")
+    loan_amount = st.number_input("Loan Amount (INR)", 
+                                min_value=50000, max_value=5000000, 
+                                value=800000, step=50000,
+                                format="%d")
+    family_income = st.number_input("Annual Family Income (INR)",
+                                   min_value=0, max_value=10000000,
+                                   value=500000, step=50000,
+                                   format="%d")
+
+with right:
+    st.subheader("🔍 Risk Assessment (Live API Inference)")
+    
+    if st.button("Assess Loan Risk", type="primary", use_container_width=True):
+        # Prepare payload for API
+        payload = {
+            "cgpa": float(cgpa),
+            "internships_count": int(internships),
+            "backlogs": int(backlogs),
+            "field_of_study": field_slug,
+            "college_placement_rate": float(college_placement_rate),
+            "loan_amount_inr": float(loan_amount),
+            "annual_family_income_inr": float(family_income)
         }
-        SALARY_MAP = {
-            "Computer Science / IT": 0.88,
-            "Data Science / AI": 0.92,
-            "MBA / Finance": 0.75,
-            "Mechanical Engineering": 0.60,
-            "Electrical Engineering": 0.58,
-            "Civil Engineering": 0.42,
-            "Biotechnology / Life Sciences": 0.38,
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": API_KEY
         }
         
-        college_placement_rate = st.slider("College Placement Rate (%)", 20, 100, 75)
-        
-        st.markdown("**Loan Details**")
-        loan_amount = st.number_input("Loan Amount (INR)", 
-                                    min_value=50000, max_value=5000000, 
-                                    value=500000, step=50000,
-                                    format="%d")
-
-    with right:
-        st.subheader("🔍 Risk Assessment")
-        
-        if st.button("Assess Loan Risk", type="primary", use_container_width=True):
-            # Compute features
-            cgpa_norm = cgpa / 10.0
-            internship_weight = min(internships / 3.0, 1.0)
-            demand_proxy = DEMAND_MAP[field_demand]
-            salary_norm = SALARY_MAP[field_demand]
-            placement_rate_norm = college_placement_rate / 100.0
-            
-            potential_score = (
-                cgpa_norm * 0.35 +
-                internship_weight * 0.25 +
-                placement_rate_norm * 0.25 +
-                salary_norm * 0.15
-            )
-            
-            features = np.array([[
-                cgpa_norm,
-                internships,
-                backlogs,
-                salary_norm,
-                potential_score,
-                demand_proxy,
-                placement_rate_norm
-            ]])
-            
-            features_sc = scaler.transform(features)
-            prob = model.predict_proba(features_sc)[0][1]
-            
-            # Risk tier
-            if prob >= 0.72:
-                risk_tier = "🟢 GREEN — Low Risk"
-                tier_color = "success"
-                recommendation = "APPROVE — Strong earning trajectory"
-            elif prob >= 0.50:
-                risk_tier = "🟡 AMBER — Moderate Risk"
-                tier_color = "warning"
-                recommendation = "APPROVE WITH CONDITIONS — Monitor repayment quarterly"
-            else:
-                risk_tier = "🔴 RED — High Risk"
-                tier_color = "error"
-                recommendation = "DECLINE OR REQUIRE CO-SIGNER"
+        try:
+            with st.spinner("Calling EduPredict API..."):
+                response = requests.post(f"{API_URL}/v1/assess", json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+            prob = data.get("repayment_probability", 0.0)
+            risk_tier = data.get("risk_tier", "UNKNOWN")
+            recommendation = data.get("recommendation", "")
+            potential_score = data.get("potential_score", 0.0)
+            shap_vals = data.get("shap_contributions", {})
             
             # Display result
             st.metric("Repayment Probability", f"{prob:.1%}")
             st.metric("Potential Score", f"{potential_score:.2f} / 1.00")
             
-            if tier_color == "success":
-                st.success(f"**Risk Tier:** {risk_tier}")
+            if risk_tier == "GREEN":
+                st.success(f"**Risk Tier:** 🟢 GREEN — Low Risk")
                 st.success(f"**Recommendation:** {recommendation}")
-            elif tier_color == "warning":
-                st.warning(f"**Risk Tier:** {risk_tier}")
+            elif risk_tier == "AMBER":
+                st.warning(f"**Risk Tier:** 🟡 AMBER — Moderate Risk")
                 st.warning(f"**Recommendation:** {recommendation}")
             else:
-                st.error(f"**Risk Tier:** {risk_tier}")
+                st.error(f"**Risk Tier:** 🔴 RED — High Risk")
                 st.error(f"**Recommendation:** {recommendation}")
             
             st.progress(float(prob))
+            st.caption(f"Assessment ID: `{data.get('assessment_id')}` | Model: `{data.get('model_version')}`")
             
-            # SHAP waterfall
-            st.markdown("**Why this score? (SHAP Explainability)**")
-            try:
-                explainer = shap.TreeExplainer(model)
-                shap_vals = explainer.shap_values(features_sc)
-                
+            # SHAP waterfall from API
+            if shap_vals:
+                st.markdown("**Why this score? (API SHAP Explainability)**")
                 fig, ax = plt.subplots(figsize=(8, 4))
-                feature_names = metrics["feature_cols"]
-                importances = dict(zip(feature_names, shap_vals[0]))
-                sorted_imp = sorted(importances.items(), key=lambda x: abs(x[1]), reverse=True)
+                
+                # Sort features by absolute contribution
+                sorted_imp = sorted(shap_vals.items(), key=lambda x: abs(x[1]), reverse=True)
+                # Keep top 10 for readability
+                sorted_imp = sorted_imp[:10]
                 
                 names = [x[0].replace("_", " ") for x in sorted_imp]
                 vals = [x[1] for x in sorted_imp]
@@ -187,34 +165,29 @@ if os.path.exists("edupredict-ai/model/artifacts/model.pkl") and os.path.exists(
                 plt.tight_layout()
                 st.pyplot(fig)
                 plt.close()
-            except Exception as e:
-                st.info("SHAP visualization unavailable for this prediction.")
-            
-            # Loan details
-            st.markdown("---")
-            emi_estimate = loan_amount * 0.023
-            st.markdown(f"**Loan:** ₹{loan_amount:,} | "
-                    f"**Est. Monthly EMI:** ₹{emi_estimate:,.0f} | "
-                    f"**Field:** {field_demand}")
+                
+        except requests.exceptions.RequestException as e:
+            st.error(f"API Error: Failed to reach backend at {API_URL}/v1/assess")
+            st.code(str(e))
 
-    # ── Bottom: SHAP global summary ──────────────────────────────
-    st.markdown("---")
-    st.subheader("📊 Global Feature Importance")
-    if os.path.exists("edupredict-ai/model/artifacts/shap_summary.png"):
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            st.image("edupredict-ai/model/artifacts/shap_summary.png", 
-                    caption="SHAP Feature Importance (training set)")
-        with col_b:
-            st.markdown("""
-            **How to read this chart:**
-            - Bars show each feature's average impact on the model's output
-            - Longer bar = stronger influence on repayment prediction
-            - Green features push toward "will repay"
-            - Red features push toward "will default"
-            
-            **Key insight:** This model uses earning potential signals 
-            (CGPA, field demand, salary trajectory) — not past credit history. 
-            """)
+# ── Bottom: SHAP global summary ──────────────────────────────
+st.markdown("---")
+st.subheader("📊 Global Feature Importance")
+if os.path.exists("model/artifacts/shap_summary.png"):
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        st.image("model/artifacts/shap_summary.png", 
+                caption="SHAP Feature Importance (training set)")
+    with col_b:
+        st.markdown("""
+        **How to read this chart:**
+        - Bars show each feature's average impact on the model's output
+        - Longer bar = stronger influence on repayment prediction
+        - Green features push toward "will repay"
+        - Red features push toward "will default"
+        
+        **Key insight:** This model uses earning potential signals 
+        (CGPA, field demand, salary trajectory) — not past credit history. 
+        """)
 else:
-    st.warning("Model artifacts not found. Please run the training script first.")
+    st.info("Global SHAP summary not available.")

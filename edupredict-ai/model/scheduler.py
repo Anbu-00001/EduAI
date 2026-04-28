@@ -18,12 +18,15 @@ import asyncio
 import logging
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+
+from config import EnvConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +38,6 @@ def run_dag_job():
     """Job: refresh demand data from all sources."""
     try:
         logger.info("Scheduler: starting DAG run")
-        import sys
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from data.pipeline.dag import run_dag
         from data.pipeline.save_snapshot import save_snapshot
@@ -112,7 +114,7 @@ def run_retraining_job():
         logger.info("Auto-retraining triggered by drift detection")
         import subprocess
         result = subprocess.run(
-            ["python", "model/retrain_with_temporal.py"],
+            [sys.executable, "model/retrain_with_temporal.py"],
             capture_output=True, text=True, timeout=1800  # 30 min max
         )
         if result.returncode == 0:
@@ -132,7 +134,7 @@ def create_scheduler() -> BackgroundScheduler:
         job_defaults={"misfire_grace_time": 300, "coalesce": True}
     )
 
-    dag_interval_hours = float(os.environ.get("DAG_INTERVAL_HOURS", "6"))
+    dag_interval_hours = EnvConfig.DAG_INTERVAL_HOURS()
     scheduler.add_job(
         run_dag_job,
         trigger=IntervalTrigger(hours=dag_interval_hours),

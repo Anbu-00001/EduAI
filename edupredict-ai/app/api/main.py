@@ -31,6 +31,10 @@ from app.api.consent import check_consent, get_consent_notice
 from model.temporal_features import build_peer_cohort_graph, compute_macro_index
 from model.scheduler import create_scheduler
 
+from config import EnvConfig
+
+logger = logging.getLogger(__name__)
+
 # Custom metrics
 PREDICTION_COUNTER = Counter(
     "edupredict_predictions_total",
@@ -67,9 +71,7 @@ async def lifespan(app: FastAPI):
     import asyncpg
     from app.api.auth import hash_api_key
     
-    app.state.db_pool = await asyncpg.create_pool(
-        os.environ.get("DATABASE_URL", "postgresql://edupredict:edupredict@db:5432/edupredict")
-    )
+    app.state.db_pool = await asyncpg.create_pool(EnvConfig.DATABASE_URL())
     
     # Initialize Demo Tenant & API Key for Dashboard
     async with app.state.db_pool.acquire() as conn:
@@ -99,9 +101,9 @@ async def lifespan(app: FastAPI):
         ECE_GAUGE.set(metrics.get("post_calibration_ece", 0))
         AUC_GAUGE.set(metrics.get("graph_regularised_auc", 0))
         
-        print("✅ EduPredict AI v5.0: Production artifacts and Monitoring active.")
+        logger.info("✅ EduPredict AI v5.0: Production artifacts and Monitoring active.")
     except Exception as e:
-        print(f"❌ Startup Error: {e}")
+        logger.error(f"❌ Startup Error: {e}")
 
     # Start Scheduler
     app.state.scheduler = create_scheduler()
@@ -147,9 +149,8 @@ class StudentProfile(BaseModel):
     @field_validator("field_of_study")
     @classmethod
     def validate_field(cls, v):
-        valid = ["computer_science", "data_science", "mba_finance",
-                 "mechanical_engineering", "electrical_engineering",
-                 "civil_engineering", "biotechnology"]
+        from config import FIELD_QUERIES
+        valid = list(FIELD_QUERIES.keys())
         if v not in valid:
             raise ValueError(f"field_of_study must be one of {valid}")
         return v
@@ -199,7 +200,11 @@ def build_features(profile: StudentProfile, demand_lookup: dict, velocity_lookup
     potential_score = (0.25 * cgpa_norm + 0.25 * internship_weight + 0.25 * placement_rate_norm + 0.25 * demand_proxy)
     v_data = velocity_lookup.get(profile.field_of_study, {"velocity": 0.0, "accel": 0.0, "r2": 0.0})
     v_scaled = np.clip((v_data["velocity"] + 50) / 100, 0, 1)
-    momentum = 0.3 * v_scaled + 0.7 * demand_proxy
+    
+    # Using EWMA alpha
+    from model.temporal_features import _ewma_alpha
+    alpha = _ewma_alpha(2.0)
+    momentum = alpha * v_scaled + (1 - alpha) * demand_proxy
     
     return np.array([
         cgpa_norm, profile.internships_count, profile.backlogs,
@@ -243,15 +248,16 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
         vel_df = compute_demand_velocity()
         velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index(os.environ.get("DATAGOV_API_KEY", ""))
+    macro_index = compute_macro_index()
     
-    feature_names = [
+    feature_names = app.state.metrics.get("feature_cols_v3", [
         "cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized",
         "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day",
         "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index"
-    ]
+    ])
     
     features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
     features_sc = app.state.scaler.transform(pd.DataFrame([features], columns=feature_names))
@@ -269,7 +275,11 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
     # 3. Calibration & Conformal
     cal_params = app.state.calibration
     if cal_params.get("method") == "isotonic":
-        cal_prob = float(np.interp(p_blended, np.array(cal_params["bins"]), np.array(cal_params["lookup"])))
+        bins = np.array(cal_params["bins"])
+        lookup = np.array(cal_params["lookup"])
+        idx = np.searchsorted(bins, p_blended, side="right") - 1
+        idx = max(0, min(idx, len(lookup) - 1))
+        cal_prob = float(lookup[idx])
     else:
         cal_prob = float(1 / (1 + np.exp(cal_params.get("A", 1.0) * p_blended + cal_params.get("B", 0.0))))
     
@@ -290,22 +300,28 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
     PREDICTION_PROBABILITY.observe(cal_prob)
     background_tasks.add_task(log_api_call, app.state.db_pool, assessment_id, json.dumps(dict(zip(feature_names, features.tolist()))), cal_prob, risk_tier, tenant["tenant_id"])
     
+    recommendations = {
+        "GREEN": "High repayment probability. Profile exhibits strong academic and market indicators. Approved for preferential interest rates.",
+        "AMBER": "Moderate risk. Repayment probability meets baseline requirements but warrants additional collateral or co-signer verification.",
+        "RED": "High risk detected. Model suggests significant variance in earning potential. Application requires manual underwriter review."
+    }
+    
     return AssessmentResponse(
         assessment_id=assessment_id,
         repayment_probability=round(p_blended, 4),
         calibrated_probability=round(cal_prob, 4),
         p_model=round(p_model, 4), p_cohort=round(p_cohort, 4), p_blended=round(p_blended, 4),
         confidence_interval_90pct=ci, risk_tier=risk_tier,
-        recommendation="Decision based on Phase 4 Production Model",
+        recommendation=recommendations.get(risk_tier, "Decision pending"),
         potential_score=round(features[4], 4),
         shap_contributions=shap_contributions, counterfactual=None, adverse_action=adverse_action,
         fairness_note="Audited for DPDP compliance and demographic parity",
-        model_version=app.state.metrics["model_version"], timestamp=datetime.utcnow().isoformat()
+        model_version=app.state.metrics.get("model_version", "unknown"), timestamp=datetime.utcnow().isoformat()
     )
 
 @app.post("/v1/shadow/assess")
-async def shadow_assess(profile: StudentProfile, existing_score: float = 0.0, tenant: dict = Depends(get_current_tenant)):
-    result = await assess_student(profile, BackgroundTasks(), Request({"type": "http"}), tenant)
+async def shadow_assess(profile: StudentProfile, request: Request, existing_score: float = 0.0, tenant: dict = Depends(get_current_tenant)):
+    result = await assess_student(profile, BackgroundTasks(), request, tenant)
     agreement = "AGREE" if (result.calibrated_probability >= 0.5) == (existing_score >= 0.5) else "DISAGREE"
     return {
         "shadow_result": result, "existing_system_score": existing_score,
@@ -320,6 +336,7 @@ async def get_notice():
 @app.post("/v1/student/loan-roi")
 async def student_loan_roi(
     profile: StudentProfile,
+    request: Request,
     annual_interest_rate: float = 0.105,   # 10.5% — typical NBFC rate
     tenure_years: int = 7,
     tenant: dict = Depends(get_current_tenant)
@@ -338,9 +355,10 @@ async def student_loan_roi(
         vel_df = compute_demand_velocity()
         velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index(os.environ.get("DATAGOV_API_KEY", ""))
+    macro_index = compute_macro_index()
     starting_salary_norm = demand_lookup.get(profile.field_of_study, 0.5)
     
     # Get repayment probability (reuses existing assessment logic)
@@ -354,9 +372,20 @@ async def student_loan_roi(
     lp = np.mean([m.predict(features_sc) for m in base_models["lgb"]], axis=0)
     cp = np.mean([m.predict_proba(features_sc)[:, 1] for m in base_models["cat"]], axis=0)
     mi = np.column_stack([xp, lp, cp])
-    raw_prob = float(app.state.meta_model.predict_proba(mi)[0, 1])
+    p_model = float(app.state.meta_model.predict_proba(mi)[0, 1])
+    
+    p_cohort = float(build_peer_cohort_graph(app.state.X_train, app.state.y_train, features_sc)[0])
+    p_blended = app.state.graph_params["alpha"] * p_model + (1 - app.state.graph_params["alpha"]) * p_cohort
+    
     cal_params = app.state.calibration
-    cal_prob = float(1 / (1 + np.exp(cal_params["A"] * raw_prob + cal_params["B"])))
+    if cal_params.get("method") == "isotonic":
+        bins = np.array(cal_params["bins"])
+        lookup = np.array(cal_params["lookup"])
+        idx = np.searchsorted(bins, p_blended, side="right") - 1
+        idx = max(0, min(idx, len(lookup) - 1))
+        cal_prob = float(lookup[idx])
+    else:
+        cal_prob = float(1 / (1 + np.exp(cal_params["A"] * p_blended + cal_params["B"])))
     
     roi_report = compute_loan_roi(
         field=profile.field_of_study,
@@ -398,13 +427,14 @@ async def student_field_ranking(
             "placement rate, and market diversity (HHI)."
         ),
         "weights_source": "Derived from trained ensemble SHAP values — "
-                          "reflects what actually predicts loan repayment"
+            "reflects what actually predicts loan repayment"
     }
 
 
 @app.post("/v1/student/skill-gap")
 async def student_skill_gap(
     profile: StudentProfile,
+    request: Request,
     tenant: dict = Depends(get_current_tenant)
 ):
     """
@@ -419,9 +449,10 @@ async def student_skill_gap(
         vel_df = compute_demand_velocity()
         velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
-    except: pass
+    except Exception as e:
+        logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index(os.environ.get("DATAGOV_API_KEY", ""))
+    macro_index = compute_macro_index()
     feature_names = app.state.metrics.get("feature_cols_v3", [])
     features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
     features_sc = app.state.scaler.transform(
@@ -430,24 +461,30 @@ async def student_skill_gap(
     
     base_models = app.state.base_models
     def predict_fn(x):
-        # x is assumed to be raw features here for find_counterfactual logic
-        # but build_features returns raw features. 
-        # Wait, find_counterfactual calls predict_fn with x_prime (raw features).
-        # So predict_fn must scale them.
         x_sc = app.state.scaler.transform(pd.DataFrame(x, columns=feature_names))
         xp = np.mean([m.predict_proba(x_sc)[:,1] for m in base_models["xgb"]], axis=0)
         lp = np.mean([m.predict(x_sc) for m in base_models["lgb"]], axis=0)
         cp = np.mean([m.predict_proba(x_sc)[:,1] for m in base_models["cat"]], axis=0)
         mi = np.column_stack([xp, lp, cp])
-        return app.state.meta_model.predict_proba(mi)[:,1]
+        p_mod = app.state.meta_model.predict_proba(mi)[:,1]
+        
+        # Need to include cohort prob for correct blended prob
+        p_coh = build_peer_cohort_graph(app.state.X_train, app.state.y_train, x_sc)
+        p_blend = app.state.graph_params["alpha"] * p_mod + (1 - app.state.graph_params["alpha"]) * p_coh
+        
+        cal_params = app.state.calibration
+        if cal_params.get("method") == "isotonic":
+            bins = np.array(cal_params["bins"])
+            lookup = np.array(cal_params["lookup"])
+            # searchsorted works on 1D arrays, p_blend could be 1D
+            indices = np.searchsorted(bins, p_blend, side="right") - 1
+            indices = np.clip(indices, 0, len(lookup) - 1)
+            cal_p = lookup[indices]
+        else:
+            cal_p = 1 / (1 + np.exp(cal_params["A"] * p_blend + cal_params["B"]))
+        return cal_p
     
-    xp = np.mean([m.predict_proba(features_sc)[:,1] for m in base_models["xgb"]], axis=0)
-    lp = np.mean([m.predict(features_sc) for m in base_models["lgb"]], axis=0)
-    cp = np.mean([m.predict_proba(features_sc)[:,1] for m in base_models["cat"]], axis=0)
-    mi = np.column_stack([xp, lp, cp])
-    cal_params = app.state.calibration
-    raw_prob = float(app.state.meta_model.predict_proba(mi)[0,1])
-    cal_prob = float(1/(1+np.exp(cal_params["A"]*raw_prob+cal_params["B"])))
+    cal_prob = predict_fn(np.array([features]))[0]
     
     from model.counterfactual import find_counterfactual
     cf = find_counterfactual(
@@ -460,7 +497,7 @@ async def student_skill_gap(
         counterfactual_result=cf,
         predict_fn=predict_fn,
         feature_names=feature_names,
-        current_probability=cal_prob,
+        current_probability=float(cal_prob),
         field=profile.field_of_study,
     )
     

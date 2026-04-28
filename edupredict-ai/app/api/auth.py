@@ -18,20 +18,19 @@ Rate limiting is applied per API key (not per IP):
 """
 
 import hashlib
-import os
 import secrets
-import time
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import HTTPException, Security, Depends, Request
+from fastapi import HTTPException, Security, Request
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 import asyncpg
 
+from config import EnvConfig
+
 logger = logging.getLogger(__name__)
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "change_this_in_production_placeholder_32chars")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 1
 
@@ -61,12 +60,12 @@ def create_jwt_token(tenant_id: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
         "type": "access",
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, EnvConfig.JWT_SECRET(), algorithm=JWT_ALGORITHM)
 
 
 def verify_jwt_token(token: str) -> dict:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(token, EnvConfig.JWT_SECRET(), algorithms=[JWT_ALGORITHM])
     except JWTError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
@@ -81,10 +80,14 @@ async def get_current_tenant(
     Returns tenant dict with {tenant_id, rate_limit, permissions}.
     Raises 401 if neither is valid.
     """
-    db_pool = request.app.state.db_pool
-
+    db_pool = getattr(request.app.state, "db_pool", None)
+    
     if api_key:
+        if not db_pool:
+            raise HTTPException(status_code=500, detail="Database connection missing")
+            
         key_hash = hash_api_key(api_key)
+        # Using DB lookup for API keys; timing attacks mitigated by hashing before query
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT tenant_id, rate_limit_rpm, active "
@@ -103,7 +106,7 @@ async def get_current_tenant(
         payload = verify_jwt_token(credentials.credentials)
         return {
             "tenant_id": payload["sub"],
-            "rate_limit_rpm": 60,   # Default for JWT auth (dashboard users)
+            "rate_limit_rpm": EnvConfig.RATE_LIMIT_DEFAULT_RPM(),
             "auth_method": "jwt",
         }
 

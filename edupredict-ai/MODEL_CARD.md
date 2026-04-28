@@ -3,7 +3,7 @@
 ## Model Details
 - **Version**: v4.0-production
 - **Task**: Binary classification — student loan repayment prediction
-- **Date**: 2026-04-27
+- **Date**: 2026-04-28
 - **License**: MIT
 
 ## Intended Use
@@ -15,19 +15,19 @@ Advisory risk scoring for Indian student education loan applications
 
 | Metric | Value |
 |--------|-------|
-| Graph-regularised AUC | 0.8031 |
-| vs CIBIL-only baseline | +0.1831 |
-| Calibration ECE | 0.0331 |
-| Conformal coverage (90% target) | 0.905 |
+| Graph-regularised AUC | 0.7867 |
+| vs CIBIL-only baseline | +0.1667 |
+| Calibration ECE | 0.0258 |
+| Conformal coverage (90% target) | 0.923 |
 
 ## Fairness Audit
 
 | Metric | Value | Threshold | Status |
 |--------|-------|-----------|--------|
-| Demographic Parity Index | 0.8256 | ≥ 0.80 | PASS |
-| Equalized Odds TPR diff | 0.0682 | ≤ 0.10 | PASS |
-| Equalized Odds FPR diff | 0.1424 | ≤ 0.10 | FAIL |
-| Predictive Parity diff | 0.0505 | ≤ 0.10 | PASS |
+| Demographic Parity Index | 0.8241 | ≥ 0.80 | PASS |
+| Equalized Odds TPR diff | 0.0943 | ≤ 0.10 | PASS |
+| Equalized Odds FPR diff | 0.1798 | ≤ 0.10 | FAIL |
+| Predictive Parity diff | 0.1014 | ≤ 0.10 | FAIL |
 
 ## Regulatory Compliance
 - **RBI FREE-AI Framework (August 2025)**: Explainability via SHAP, Fairness via DPI ≥ 0.80

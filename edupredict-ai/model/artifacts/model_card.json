@@ -4,7 +4,7 @@
     "version": "v4.0-production",
     "type": "Stacked ensemble (XGBoost + LightGBM + CatBoost) + Logistic meta-learner",
     "task": "Binary classification \u2014 student loan repayment prediction",
-    "date_trained": "2026-04-27T12:22:08.543431",
+    "date_trained": "2026-04-28T06:13:22.607564",
     "license": "MIT",
     "contact": "dpo@edupredict.ai"
   },
@@ -31,25 +31,25 @@
       "Salary data from US Scorecard \u2014 adjusted for India PPP",
       "No real Indian student loan repayment outcome data in training set"
     ],
-    "n_training_samples": 7500
+    "n_training_samples": 6000
   },
   "performance": {
     "primary_metric": "ROC-AUC (graph-regularised)",
-    "auc": 0.8031,
+    "auc": 0.7867,
     "baseline_auc_cibil_only": 0.62,
-    "auc_improvement": 0.1831,
-    "calibration_ece": 0.0331,
+    "auc_improvement": 0.1667,
+    "calibration_ece": 0.0258,
     "calibration_method": "isotonic",
-    "conformal_coverage_90pct": 0.9048,
-    "conformal_q_hat": 0.6919315403422983
+    "conformal_coverage_90pct": 0.923,
+    "conformal_q_hat": 0.6713780918727914
   },
   "fairness": {
     "sensitive_attribute": "Field of study (proxy for socioeconomic background)",
     "metrics": {
-      "demographic_parity_index": 0.8256137479541735,
-      "equalized_odds_tpr_diff": 0.06817039169980355,
-      "equalized_odds_fpr_diff": 0.14235890932149647,
-      "predictive_parity_diff": 0.050497277956254916
+      "demographic_parity_index": 0.8240989399293287,
+      "equalized_odds_tpr_diff": 0.09432272509195583,
+      "equalized_odds_fpr_diff": 0.17982456140350878,
+      "predictive_parity_diff": 0.10135674381484439
     },
     "overall_fair": false,
     "fairness_standard": "80% rule (ECOA / RBI FREE-AI Framework)",
@@ -65,7 +65,7 @@
     "calibration": "isotonic",
     "graph_regularisation": {
       "method": "RBF kernel k-NN (k=50)",
-      "alpha": 0.12244897959183673,
+      "alpha": 0.7959183673469387,
       "sigma": "Median heuristic"
     },
     "uncertainty": "Split conformal prediction (Angelopoulos & Bates 2021)"
@@ -73,8 +73,8 @@
   "features": {
     "cgpa_normalized": {
       "range": [
-        0.6000211038539915,
-        0.9499568555374234
+        0.6000279697327727,
+        0.9499944588987376
       ],
       "description": "CGPA normalised to [0,1] by dividing by 10"
     },
@@ -94,71 +94,71 @@
     },
     "median_salary_normalized": {
       "range": [
-        0.1202893851515278,
-        0.9327527738740028
+        0.0947519370121992,
+        0.8561435286519303
       ],
       "description": "Median salary for field, normalised to [0,1]"
     },
     "potential_score": {
       "range": [
-        0.3610333629683108,
-        0.9249709905710316
+        0.3544604799861133,
+        0.9144474192061908
       ],
       "description": "Weighted composite: 0.35*CGPA + 0.25*internships + 0.25*placement + 0.15*salary"
     },
     "demand_proxy": {
       "range": [
-        0.1202893851515278,
-        0.9327527738740028
+        0.0947519370121992,
+        0.8561435286519303
       ],
       "description": "Normalised job posting count for student's field"
     },
     "placement_rate_for_field": {
       "range": [
-        0.4000024314727136,
-        0.949933479609804
+        0.4000030910211897,
+        0.949901102957636
       ],
       "description": "Institution placement rate [0,1]"
     },
     "demand_velocity_per_day": {
       "range": [
-        46.60802764466329,
-        1482.6587785529232
+        -51.31187007205783,
+        808.6026554336345
       ],
       "description": "OLS slope of job count over time (jobs/day)"
     },
     "demand_acceleration": {
       "range": [
-        -346346.38860060193,
-        81496.03607947075
+        -109983.12515903155,
+        140182.81125074378
       ],
       "description": "Second derivative of job demand (jobs/day\u00b2)"
     },
     "velocity_r_squared": {
       "range": [
-        -9.171749263305333,
-        -2.7567954530559255
+        -9.845368396901563,
+        -2.898869394897614
       ],
       "description": "OLS fit quality for demand trend (0=noisy, 1=clean)"
     },
     "demand_momentum": {
       "range": [
-        0.1339391333762906,
-        0.8979132609600855
+        0.145357578801887,
+        0.8677118720758097
       ],
       "description": "EWMA: 0.3*velocity + 0.7*demand_proxy"
     },
     "market_hhi": {
       "range": [
-        0.18234973020785383,
-        0.18234973020785383
+        0.15506508338661482,
+        0.15506508338661482
       ],
       "description": "Herfindahl-Hirschman Index of field concentration"
     },
     "macro_index": {
       "range": [
-        0.4714544916884646,
-        0.4714544916884646
+        0.511608273612401,
+        0.511608273612401
       ],
       "description": "India Macro Repayment Index: composite of unemployment, repo rate, CPI, hiring"
     }

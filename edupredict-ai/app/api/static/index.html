@@ -32,7 +32,7 @@
 
     <script type="module">
         import React, { useState, useEffect } from 'https://esm.sh/react@18.2.0';
-        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
 
         const API_BASE = "/v1";
         const API_KEY = "ep_demo_dashboard_key_2026"; // Initialised in main.py lifespan
@@ -142,8 +142,11 @@
                                         React.createElement('input', {
                                             type: 'number',
                                             className: 'w-full p-2.5 rounded-xl input-focus',
-                                            value: profile[key],
-                                            onChange: (e) => setProfile({...profile, [key]: parseFloat(e.target.value)})
+                                            value: profile[key] || '',
+                                            onChange: (e) => {
+                                                const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                                setProfile({...profile, [key]: isNaN(val) ? 0 : val});
+                                            }
                                         })
                                     )
                                 ),
@@ -226,24 +229,24 @@
                                                         className: `h-full rounded-full ${val > 0 ? 'bg-emerald-500' : 'bg-rose-500'}`,
                                                         style: { width: `${Math.min(Math.abs(val) * 300, 100)}%`, marginLeft: val > 0 ? '0' : 'auto' }
                                                     })
-                                                )
                                             )
                                         )
                                     )
-                                ),
-                                // ADVERSE ACTION PANEL
+                                )),
+                                // ADVERSE_ACTION PANEL
                                 result.adverse_action && React.createElement('div', { className: 'glass p-6 rounded-3xl bg-rose-500/5' },
                                     React.createElement('h4', { className: 'text-xs text-rose-400 uppercase font-bold mb-4 flex items-center gap-2' }, 
                                         React.createElement('span', { className: 'text-rose-400' }, '⚠'), 'Adverse Action Reasons'
                                     ),
                                     React.createElement('div', { className: 'space-y-3' },
-                                        result.adverse_action.map(aa => 
+                                        result.adverse_action.reasons.map(aa => 
                                             React.createElement('div', { key: aa.code, className: 'p-3 bg-rose-500/10 rounded-xl border border-rose-500/10' },
                                                 React.createElement('p', { className: 'text-[9px] font-bold text-rose-400' }, aa.code),
-                                                React.createElement('p', { className: 'text-xs text-slate-300 mt-0.5' }, aa.reason)
+                                                React.createElement('p', { className: 'text-xs text-slate-300 mt-0.5' }, `Impact: ${(aa.impact * 100).toFixed(1)}%`)
                                             )
                                         )
-                                    )
+                                    ),
+                                    React.createElement('p', { className: 'text-[10px] text-slate-500 mt-4 italic' }, result.adverse_action.notice)
                                 )
                             )
                         ) : React.createElement('div', { className: 'h-full flex flex-col items-center justify-center text-slate-600 glass rounded-3xl border-dashed border-2 min-h-[400px]' },
@@ -256,7 +259,8 @@
             );
         };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
+        const container = document.getElementById('root');
+        const root = createRoot(container);
         root.render(React.createElement(App));
     </script>
 </body>

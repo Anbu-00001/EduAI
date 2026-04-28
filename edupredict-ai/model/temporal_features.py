@@ -1,13 +1,15 @@
 import os
 import json
+import math
 import numpy as np
 import pandas as pd
 import logging
 from sklearn.metrics import log_loss
+from config import EnvConfig, FIELD_QUERIES
 
 logger = logging.getLogger(__name__)
 
-def compute_macro_index(datagov_api_key: str) -> float:
+def compute_macro_index(datagov_api_key: str = None) -> float:
     """
     Upstart's Macro Index (UMI) accounts for economic conditions
     that affect repayment independently of individual student profile.
@@ -40,27 +42,28 @@ def compute_macro_index(datagov_api_key: str) -> float:
 
     # 1. Graduate unemployment rate from data.gov.in PLFS
     try:
-        api_key = datagov_api_key or os.environ.get("DATAGOV_API_KEY", "")
-        url = "https://api.data.gov.in/resource/7d9b5b2e-5671-4e0b-a2e1-c8d3ad8f2e1b"
-        resp = requests.get(
-            url, params={"api-key": api_key, "format": "json", "limit": 1},
-            timeout=10
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            records = data.get("records", [])
-            if records:
-                unemp_rate = float(records[0].get("unemployment_rate", 0.13)) / 100
-                components["unemployment"] = unemp_rate
+        api_key = datagov_api_key or EnvConfig.DATAGOV_API_KEY()
+        if api_key:
+            url = "https://api.data.gov.in/resource/7d9b5b2e-5671-4e0b-a2e1-c8d3ad8f2e1b"
+            resp = requests.get(
+                url, params={"api-key": api_key, "format": "json", "limit": 1},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                records = data.get("records", [])
+                if records:
+                    unemp_rate = float(records[0].get("unemployment_rate", 0.13)) / 100
+                    components["unemployment"] = unemp_rate
     except Exception as e:
         logger.warning(f"Could not fetch unemployment rate: {e}")
         components["unemployment"] = 0.13  # PLFS 2024 known value (documented)
 
     # 2. RBI repo rate — public knowledge, stable
-    components["repo_rate"] = float(os.environ.get("RBI_REPO_RATE", "0.065"))
+    components["repo_rate"] = EnvConfig.RBI_REPO_RATE()
 
     # 3. CPI education component — from RBI bulletin
-    components["cpi_education"] = float(os.environ.get("CPI_EDUCATION", "0.05"))
+    components["cpi_education"] = EnvConfig.CPI_EDUCATION()
 
     # 4. Hiring index from demand DAG
     try:
@@ -109,7 +112,6 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
     files = sorted([f for f in os.listdir(cache_dir) if f.startswith("snapshot_")])
     if len(files) < 2:
         # Return dummy zeros but with correct structure
-        from data.pipeline.dag import FIELD_QUERIES
         records = []
         for field in FIELD_QUERIES:
             records.append({
@@ -125,38 +127,71 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
     for f in files:
         ts = int(f.split("_")[1].split(".")[0])
         with open(os.path.join(cache_dir, f)) as j:
-            data = json.load(j)
-            for rec in data["records"]:
-                rec["timestamp"] = ts
-                all_data.append(rec)
+            try:
+                data = json.load(j)
+                for rec in data.get("records", []):
+                    rec["timestamp"] = ts
+                    all_data.append(rec)
+            except Exception as e:
+                logger.warning(f"Error reading history file {f}: {e}")
     
     df = pd.DataFrame(all_data)
+    if df.empty or "field" not in df:
+        records = []
+        for field in FIELD_QUERIES:
+            records.append({
+                "field": field,
+                "demand_velocity_per_day": 0.0,
+                "demand_acceleration": 0.0,
+                "velocity_r_squared": 0.0,
+                "velocity_estimated": True
+            })
+        return pd.DataFrame(records)
+
     results = []
     
     for field in df["field"].unique():
         f_df = df[df["field"] == field].sort_values("timestamp")
+        # Check valid records for this field specifically
+        if len(f_df) < 2:
+            results.append({
+                "field": field,
+                "demand_velocity_per_day": 0.0,
+                "demand_acceleration": 0.0,
+                "velocity_r_squared": 0.0,
+                "velocity_estimated": True
+            })
+            continue
+
         t = (f_df["timestamp"] - f_df["timestamp"].min()) / 86400.0 # days
         c = f_df["job_count_consensus"]
         
         # OLS slope: beta = sum((t-t_bar)*(c-c_bar)) / sum((t-t_bar)**2)
         t_bar = t.mean()
         c_bar = c.mean()
-        beta = np.sum((t - t_bar) * (c - c_bar)) / (np.sum((t - t_bar)**2) + 1e-9)
-        
-        # R^2
-        preds = t_bar + beta * (t - t_bar)
-        ss_res = np.sum((c - preds)**2)
-        ss_tot = np.sum((c - c_bar)**2)
-        r2 = 1 - (ss_res / (ss_tot + 1e-9))
+        denom = np.sum((t - t_bar)**2)
+        if denom < 1e-9:
+            beta = 0.0
+            r2 = 0.0
+        else:
+            beta = np.sum((t - t_bar) * (c - c_bar)) / denom
+            # R^2
+            preds = t_bar + beta * (t - t_bar)
+            ss_res = np.sum((c - preds)**2)
+            ss_tot = np.sum((c - c_bar)**2)
+            r2 = 1 - (ss_res / (ss_tot + 1e-9))
         
         # Acceleration (2nd derivative proxy if >= 3 snapshots, else 0)
         accel = 0.0
         if len(f_df) >= 3:
             # Simple diff of slopes
             mid = len(f_df) // 2
-            v1 = (f_df.iloc[mid]["job_count_consensus"] - f_df.iloc[0]["job_count_consensus"]) / ((f_df.iloc[mid]["timestamp"] - f_df.iloc[0]["timestamp"]) / 86400.0)
-            v2 = (f_df.iloc[-1]["job_count_consensus"] - f_df.iloc[mid]["job_count_consensus"]) / ((f_df.iloc[-1]["timestamp"] - f_df.iloc[mid]["timestamp"]) / 86400.0)
-            accel = v2 - v1
+            dt1 = (f_df.iloc[mid]["timestamp"] - f_df.iloc[0]["timestamp"]) / 86400.0
+            dt2 = (f_df.iloc[-1]["timestamp"] - f_df.iloc[mid]["timestamp"]) / 86400.0
+            if dt1 > 1e-6 and dt2 > 1e-6:
+                v1 = (f_df.iloc[mid]["job_count_consensus"] - f_df.iloc[0]["job_count_consensus"]) / dt1
+                v2 = (f_df.iloc[-1]["job_count_consensus"] - f_df.iloc[mid]["job_count_consensus"]) / dt2
+                accel = v2 - v1
             
         results.append({
             "field": field,
@@ -168,10 +203,14 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
         
     return pd.DataFrame(results)
 
-def compute_hhi(demand_df):
+def compute_hhi(demand_df: pd.DataFrame) -> float:
+    if "job_count_consensus" not in demand_df:
+        return 1.0 / len(demand_df) if len(demand_df) > 0 else 1.0
     counts = demand_df["job_count_consensus"]
     total = counts.sum()
-    if total == 0: return 1.0/len(demand_df)
+    if total == 0: 
+        logger.warning("compute_hhi: all job counts are 0, returning uniform distribution")
+        return 1.0/len(demand_df) if len(demand_df) > 0 else 1.0
     shares = counts / total
     hhi = np.sum(shares**2)
     return float(hhi)
@@ -179,6 +218,16 @@ def compute_hhi(demand_df):
 def build_peer_cohort_graph(X_train, y_train, X_query, sigma=None, top_k=50):
     X_train = np.atleast_2d(X_train)
     X_query = np.atleast_2d(X_query)
+    n_train = len(X_train)
+    if n_train > 10_000:
+        logger.warning(
+            f"X_train has {n_train} rows — pairwise distance matrix is "
+            f"{n_train}²×8 bytes = {n_train**2 * 8 / 1e9:.2f}GB. "
+            f"Sampling 5000 rows for efficiency."
+        )
+        idx = np.random.choice(n_train, 5000, replace=False)
+        X_train = X_train[idx]
+        y_train = y_train[idx]
     
     if sigma is None:
         # Median heuristic
@@ -208,6 +257,7 @@ def build_peer_cohort_graph(X_train, y_train, X_query, sigma=None, top_k=50):
     return np.array(cohort_probs)
 
 def tune_graph_alpha(p_model, p_cohort, y_true, n_alphas=50):
+    """Tune graph alpha. n_alphas=50 is a documented default (sufficient granularity)."""
     alphas = np.linspace(0, 1, n_alphas)
     best_alpha = 1.0
     min_loss = float('inf')
@@ -222,26 +272,43 @@ def tune_graph_alpha(p_model, p_cohort, y_true, n_alphas=50):
             
     return float(best_alpha)
 
+def _ewma_alpha(half_life_periods: float = 2.0) -> float:
+    """
+    α = 1 - exp(-ln(2) / T_half)
+    At T_half periods, the weight of the initial observation halves.
+    half_life=2 → α ≈ 0.293 (close to current 0.3, but mathematically derived)
+    """
+    return float(1 - math.exp(-math.log(2) / half_life_periods))
+
 def add_temporal_features(feature_df, velocity_df, demand_df):
+    
+    # Check if field_of_study exists in feature_df. If so, rename to field for merging.
+    if "field_of_study" not in feature_df.columns and "field" not in feature_df.columns:
+        raise ValueError("feature_df must contain 'field' or 'field_of_study' column to merge temporal features")
+        
+    merge_col = "field_of_study" if "field_of_study" in feature_df.columns else "field"
+    
     if velocity_df.empty:
         # If no velocity yet, just merge demand_proxy and set others to 0
         feature_df["demand_velocity_per_day"] = 0.0
         feature_df["demand_acceleration"] = 0.0
         feature_df["velocity_r_squared"] = 0.0
-        feature_df["demand_momentum"] = 0.7 * feature_df["demand_proxy"]
+        feature_df["demand_momentum"] = 0.7 * feature_df.get("demand_proxy", 0.5)
         feature_df["market_hhi"] = 1.0 / 7.0
         return feature_df
     
     # Merge velocity
-    df = feature_df.merge(velocity_df, on="field", how="left")
+    df = feature_df.merge(velocity_df, left_on=merge_col, right_on="field", how="left")
     
-    # demand_momentum = 0.3*velocity + 0.7*demand_proxy
-    # Need to scale velocity to same range as demand_proxy (0-1) roughly
     v_min = velocity_df["demand_velocity_per_day"].min()
     v_max = velocity_df["demand_velocity_per_day"].max()
     v_scaled = (df["demand_velocity_per_day"] - v_min) / (v_max - v_min + 1e-9)
     
-    df["demand_momentum"] = 0.3 * v_scaled + 0.7 * df["demand_proxy"]
+    alpha = _ewma_alpha(2.0)
+    df["demand_momentum"] = alpha * v_scaled + (1 - alpha) * df.get("demand_proxy", 0.5)
     df["market_hhi"] = compute_hhi(demand_df)
     
+    if "field" in df.columns and merge_col != "field":
+        df = df.drop(columns=["field"])
+        
     return df.fillna(0.0)

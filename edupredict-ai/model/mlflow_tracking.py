@@ -28,12 +28,22 @@ import numpy as np
 import logging
 from pathlib import Path
 
+from config import EnvConfig
+
 logger = logging.getLogger(__name__)
 
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+# Use EnvConfig for MLflow tracking URI
+try:
+    MLFLOW_TRACKING_URI = EnvConfig.MLFLOW_TRACKING_URI()
+except Exception:
+    MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
+    
 EXPERIMENT_NAME = "edupredict-ai-loan-underwriting"
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+ROOT_DIR = Path(__file__).parent.parent
+ARTIFACT_DIR = ROOT_DIR / "model" / "artifacts"
 
 
 def get_git_commit() -> str:
@@ -42,7 +52,8 @@ def get_git_commit() -> str:
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL
         ).decode().strip()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to get git commit: {e}")
         return "unknown"
 
 
@@ -62,7 +73,7 @@ def log_training_run(
     feature_cols: list,
     conformal_params: dict,
     fairness_report: dict,
-    artifact_dir: str = "model/artifacts"
+    artifact_dir: str = str(ARTIFACT_DIR)
 ):
     """
     Log a complete training run to MLflow.
@@ -77,22 +88,22 @@ def log_training_run(
 
         # Core ML metrics
         mlflow.log_metrics({
-            "stacked_ensemble_auc":     metrics["stacked_ensemble_auc"],
-            "graph_regularised_auc":    metrics["graph_regularised_auc"],
-            "auc_improvement_vs_cibil": metrics["auc_improvement"],
-            "pre_calibration_ece":      metrics["pre_calibration_ece"],
-            "post_calibration_ece":     metrics["post_calibration_ece"],
-            "conformal_coverage":       conformal_params["empirical_coverage"],
-            "conformal_q_hat":          conformal_params["q_hat"],
-            "conformal_interval_width": conformal_params["avg_interval_width"],
+            "stacked_ensemble_auc":     metrics.get("stacked_ensemble_auc", 0.0),
+            "graph_regularised_auc":    metrics.get("graph_regularised_auc", 0.0),
+            "auc_improvement_vs_cibil": metrics.get("auc_improvement", 0.0),
+            "pre_calibration_ece":      metrics.get("pre_calibration_ece", 0.0),
+            "post_calibration_ece":     metrics.get("post_calibration_ece", 0.0),
+            "conformal_coverage":       conformal_params.get("empirical_coverage", 0.0),
+            "conformal_q_hat":          conformal_params.get("q_hat", 0.0),
+            "conformal_interval_width": conformal_params.get("avg_interval_width", 0.0),
         })
 
         # Fairness metrics
         mlflow.log_metrics({
-            "fairness_dpi":       fairness_report["demographic_parity_index"],
-            "fairness_tpr_diff":  abs(fairness_report["equalized_odds_tpr_diff"]),
-            "fairness_fpr_diff":  abs(fairness_report["equalized_odds_fpr_diff"]),
-            "fairness_ppv_diff":  abs(fairness_report["predictive_parity_diff"]),
+            "fairness_dpi":       fairness_report.get("demographic_parity_index", 1.0),
+            "fairness_tpr_diff":  abs(fairness_report.get("equalized_odds_tpr_diff", 0.0)),
+            "fairness_fpr_diff":  abs(fairness_report.get("equalized_odds_fpr_diff", 0.0)),
+            "fairness_ppv_diff":  abs(fairness_report.get("predictive_parity_diff", 0.0)),
         })
 
         # Hyperparameters
@@ -105,14 +116,16 @@ def log_training_run(
         })
 
         # Log artifacts
-        for art_file in Path(artifact_dir).glob("*.json"):
-            mlflow.log_artifact(str(art_file))
-        for img_file in Path(artifact_dir).glob("*.png"):
-            mlflow.log_artifact(str(img_file))
+        art_path = Path(artifact_dir)
+        if art_path.exists():
+            for art_file in art_path.glob("*.json"):
+                mlflow.log_artifact(str(art_file))
+            for img_file in art_path.glob("*.png"):
+                mlflow.log_artifact(str(img_file))
 
         # Log models
         import pickle
-        for fold_idx, m in enumerate(base_models["xgb"]):
+        for fold_idx, m in enumerate(base_models.get("xgb", [])):
             mlflow.xgboost.log_model(m, f"base_xgb_fold_{fold_idx}")
         mlflow.sklearn.log_model(meta_model, "meta_model")
         mlflow.sklearn.log_model(scaler, "scaler")
@@ -147,14 +160,26 @@ def should_promote_to_production(
     # Get current production model metrics
     client = mlflow.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
     try:
-        prod_versions = client.get_latest_versions(
-            "EduPredictAI", stages=["Production"]
-        )
-        if not prod_versions:
-            return True, "No production model exists — promoting"
+        # Check for alias instead of stages, as stages are deprecated in MLflow > 2.9
+        # But we will use both logic for compatibility
+        prod_auc = 0.0
+        has_prod = False
+        
+        try:
+            alias_version = client.get_model_version_by_alias("EduPredictAI", "Production")
+            prod_run = client.get_run(alias_version.run_id)
+            prod_auc = float(prod_run.data.metrics.get("graph_regularised_auc", 0.0))
+            has_prod = True
+        except Exception:
+            # Fallback to stages
+            prod_versions = client.get_latest_versions("EduPredictAI", stages=["Production"])
+            if prod_versions:
+                prod_run = client.get_run(prod_versions[0].run_id)
+                prod_auc = float(prod_run.data.metrics.get("graph_regularised_auc", 0.0))
+                has_prod = True
 
-        prod_run = client.get_run(prod_versions[0].run_id)
-        prod_auc = float(prod_run.data.metrics.get("graph_regularised_auc", 0.0))
+        if not has_prod:
+            return True, "No production model exists — promoting"
 
         # Compute dynamic threshold from all past runs
         all_runs = client.search_runs(
@@ -163,7 +188,7 @@ def should_promote_to_production(
             filter_string="metrics.graph_regularised_auc > 0",
             max_results=20
         )
-        past_aucs = [r.data.metrics["graph_regularised_auc"] for r in all_runs]
+        past_aucs = [r.data.metrics.get("graph_regularised_auc", 0.0) for r in all_runs]
         if len(past_aucs) >= 3:
             auc_std = float(np.std(past_aucs))
             threshold = max(0.005, 1.96 * auc_std)
@@ -187,30 +212,49 @@ def register_model(run_id: str, model_name: str = "EduPredictAI") -> str:
     client = mlflow.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
     # Get metrics from this run
-    run = client.get_run(run_id)
-    new_auc = run.data.metrics["graph_regularised_auc"]
-    new_ece = run.data.metrics["post_calibration_ece"]
-    new_dpi = run.data.metrics["fairness_dpi"]
+    try:
+        run = client.get_run(run_id)
+        new_auc = run.data.metrics.get("graph_regularised_auc", 0.0)
+        new_ece = run.data.metrics.get("post_calibration_ece", 0.0)
+        new_dpi = run.data.metrics.get("fairness_dpi", 1.0)
+    except Exception as e:
+        logger.error(f"Failed to fetch run metrics for {run_id}: {e}")
+        return "unknown"
 
     should_promote, reason = should_promote_to_production(new_auc, new_ece, new_dpi)
     logger.info(f"Promotion decision: {should_promote} — {reason}")
 
     # Register model version
     model_uri = f"runs:/{run_id}/meta_model"
-    mv = mlflow.register_model(model_uri, model_name)
+    try:
+        mv = mlflow.register_model(model_uri, model_name)
+    except Exception as e:
+        logger.error(f"Failed to register model: {e}")
+        return "unknown"
 
-    if should_promote:
-        client.transition_model_version_stage(
-            name=model_name,
-            version=mv.version,
-            stage="Production",
-            archive_existing_versions=True
-        )
-        logger.info(f"Model v{mv.version} promoted to Production")
-    else:
-        client.transition_model_version_stage(
-            name=model_name, version=mv.version, stage="Staging"
-        )
-        logger.info(f"Model v{mv.version} moved to Staging")
+    try:
+        if should_promote:
+            try:
+                client.set_registered_model_alias(model_name, "Production", mv.version)
+            except Exception:
+                pass
+            client.transition_model_version_stage(
+                name=model_name,
+                version=mv.version,
+                stage="Production",
+                archive_existing_versions=True
+            )
+            logger.info(f"Model v{mv.version} promoted to Production")
+        else:
+            try:
+                client.set_registered_model_alias(model_name, "Staging", mv.version)
+            except Exception:
+                pass
+            client.transition_model_version_stage(
+                name=model_name, version=mv.version, stage="Staging"
+            )
+            logger.info(f"Model v{mv.version} moved to Staging")
+    except Exception as e:
+        logger.warning(f"Failed to transition model stage/alias: {e}")
 
     return mv.version

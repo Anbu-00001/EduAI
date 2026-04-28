@@ -66,6 +66,19 @@ FIELD_DESCRIPTIONS = {
     ),
 }
 
+_embedding_model = None
+
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("Loaded SentenceTransformer model for field embeddings.")
+        except Exception as e:
+            logger.error(f"Failed to load SentenceTransformer: {e}")
+            raise
+    return _embedding_model
 
 def _load_shap_weights() -> dict:
     """
@@ -76,9 +89,7 @@ def _load_shap_weights() -> dict:
     import shap as shap_lib
     
     try:
-        # Adjusted paths to match actual file structure
         base_models = pickle.load(open("model/artifacts/base_models.pkl", "rb"))
-        scaler = pickle.load(open("model/artifacts/scaler.pkl", "rb"))
         feature_cols = json.loads(
             Path("model/artifacts/metrics.json").read_text()
         ).get("feature_cols_v3", [])
@@ -104,7 +115,7 @@ def _load_shap_weights() -> dict:
         return weights
         
     except Exception as e:
-        logger.warning(f"SHAP weight loading failed: {e} — using equal weights")
+        logger.warning(f"SHAP weight loading failed: {e} — using fallback weights")
         return {}
 
 
@@ -115,12 +126,10 @@ def _compute_field_embeddings() -> dict:
     Returns: {field: embedding_vector}
     """
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        model = _get_embedding_model()
         embeddings = {}
         for field, desc in FIELD_DESCRIPTIONS.items():
             embeddings[field] = model.encode(desc)
-        logger.info(f"Field embeddings computed: {len(embeddings)} fields")
         return embeddings
     except Exception as e:
         logger.warning(f"Embeddings unavailable: {e}")
@@ -173,8 +182,11 @@ def rank_fields(student_field: Optional[str] = None) -> pd.DataFrame:
     
     # Normalise velocity to [0, 1]
     all_vel = np.array(list(vel_map.values()))
-    v_min, v_max = all_vel.min(), all_vel.max()
-    v_range = (v_max - v_min) + 1e-9
+    if len(all_vel) > 0:
+        v_min, v_max = all_vel.min(), all_vel.max()
+        v_range = max((v_max - v_min), 1e-9)
+    else:
+        v_min, v_range = 0.0, 1.0
     
     rows = []
     for field, r in records.items():

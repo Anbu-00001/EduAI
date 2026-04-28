@@ -1,7 +1,10 @@
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class FairnessReport:
@@ -36,8 +39,7 @@ def compute_fairness_metrics(
     y_pred = (y_pred_proba >= threshold).astype(int)
     groups = np.unique(sensitive_attr)
     if len(groups) != 2:
-        # Fallback if binary assumption fails, though prompt assumes binary
-        return FairnessReport(1.0, 0.0, 0.0, 0.0, True)
+        raise ValueError(f"sensitive_attr must have exactly 2 unique groups. Found {len(groups)}")
     
     g0, g1 = groups[0], groups[1]
     
@@ -47,14 +49,29 @@ def compute_fairness_metrics(
         y_p = y_pred[mask]
         
         approval_rate = y_p.mean()
-        tpr = (y_p[y_t == 1] == 1).mean() if (y_t == 1).sum() > 0 else 0.0
-        fpr = (y_p[y_t == 0] == 1).mean() if (y_t == 0).sum() > 0 else 0.0
-        ppv = y_t[y_p == 1].mean() if (y_p == 1).sum() > 0 else 0.0
+        
+        pos_count = (y_t == 1).sum()
+        if pos_count == 0:
+            logger.warning(f"Group {group} has NO positive examples in the set. TPR set to 0.0.")
+            tpr = 0.0
+        else:
+            tpr = (y_p[y_t == 1] == 1).mean()
+            
+        neg_count = (y_t == 0).sum()
+        if neg_count == 0:
+            logger.warning(f"Group {group} has NO negative examples in the set. FPR set to 0.0.")
+            fpr = 0.0
+        else:
+            fpr = (y_p[y_t == 0] == 1).mean()
+            
+        pred_pos_count = (y_p == 1).sum()
+        ppv = y_t[y_p == 1].mean() if pred_pos_count > 0 else 0.0
+        
         return {"approval": approval_rate, "tpr": tpr, "fpr": fpr, "ppv": ppv}
     
     r0, r1 = rates(g0), rates(g1)
     
-    # DPI: ratio of approval rates (minority/majority)
+    # DPI: ratio of min approval rate to max approval rate
     denom = max(r0["approval"], r1["approval"])
     num = min(r0["approval"], r1["approval"])
     dpi = num / denom if denom > 0 else 1.0
@@ -80,23 +97,34 @@ def audit_fairness(df: pd.DataFrame, y_pred_proba: np.ndarray, sensitive_col: st
     y_true = df["repaid_loan"].values
     sensitive_attr = df[sensitive_col].values
     
-    # Calculate group-level metrics
     groups = np.unique(sensitive_attr)
     group_stats = {}
     for g in groups:
         mask = sensitive_attr == g
         if mask.sum() == 0: continue
         approval_rate = (y_pred_proba[mask] >= 0.5).mean()
-        tpr = (y_pred_proba[mask & (y_true == 1)] >= 0.5).mean() if (mask & (y_true == 1)).sum() > 0 else 0.0
-        fpr = (y_pred_proba[mask & (y_true == 0)] >= 0.5).mean() if (mask & (y_true == 0)).sum() > 0 else 0.0
-        ppv = y_true[mask & (y_pred_proba >= 0.5)].mean() if (mask & (y_pred_proba >= 0.5)).sum() > 0 else 0.0
-        group_stats[str(g)] = {"approval": approval_rate, "tpr": tpr, "fpr": fpr, "ppv": ppv}
+        
+        pos_count = (mask & (y_true == 1)).sum()
+        if pos_count == 0:
+            logger.warning(f"Group {g} has NO positive examples in the set. TPR set to 0.0.")
+            tpr = 0.0
+        else:
+            tpr = (y_pred_proba[mask & (y_true == 1)] >= 0.5).mean()
+            
+        neg_count = (mask & (y_true == 0)).sum()
+        if neg_count == 0:
+            logger.warning(f"Group {g} has NO negative examples in the set. FPR set to 0.0.")
+            fpr = 0.0
+        else:
+            fpr = (y_pred_proba[mask & (y_true == 0)] >= 0.5).mean()
+            
+        pred_pos_count = (mask & (y_pred_proba >= 0.5)).sum()
+        ppv = y_true[mask & (y_pred_proba >= 0.5)].mean() if pred_pos_count > 0 else 0.0
+        group_stats[str(g)] = {"approval": float(approval_rate), "tpr": float(tpr), "fpr": float(fpr), "ppv": float(ppv)}
     
-    # Demographic Parity Index (ratio of min approval / max approval)
     approvals = [s["approval"] for s in group_stats.values()]
     dpi = min(approvals) / max(approvals) if max(approvals) > 0 else 1.0
     
-    # Differences (max absolute difference between any two groups)
     tpr_diff = max([s["tpr"] for s in group_stats.values()]) - min([s["tpr"] for s in group_stats.values()])
     fpr_diff = max([s["fpr"] for s in group_stats.values()]) - min([s["fpr"] for s in group_stats.values()])
     ppv_diff = max([s["ppv"] for s in group_stats.values()]) - min([s["ppv"] for s in group_stats.values()])
@@ -111,3 +139,61 @@ def audit_fairness(df: pd.DataFrame, y_pred_proba: np.ndarray, sensitive_col: st
     }
     return report
 
+def apply_fairness_constraint(
+        y_pred_proba: np.ndarray,
+        sensitive_attr: np.ndarray,
+        target_dpi: float = 0.80,
+        global_threshold: float = 0.50
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """
+    Adjusts thresholds per group to satisfy Demographic Parity Index (DPI).
+    Finds the majority group's approval rate at the global_threshold, 
+    then lowers the threshold for the minority group to achieve the target DPI.
+    
+    Returns:
+        adjusted_preds: binary predictions {0,1}
+        group_thresholds: dictionary of chosen thresholds per group
+    """
+    groups = np.unique(sensitive_attr)
+    if len(groups) != 2:
+        raise ValueError("apply_fairness_constraint requires exactly 2 groups")
+        
+    g0, g1 = groups[0], groups[1]
+    
+    # Calculate initial approval rates at global threshold
+    p0 = (y_pred_proba[sensitive_attr == g0] >= global_threshold).mean()
+    p1 = (y_pred_proba[sensitive_attr == g1] >= global_threshold).mean()
+    
+    majority_group = g0 if p0 > p1 else g1
+    minority_group = g1 if majority_group == g0 else g0
+    
+    majority_approval = max(p0, p1)
+    
+    # Target approval for minority group to hit DPI target
+    target_approval_minority = majority_approval * target_dpi
+    
+    # Clip to valid quantile range [0.0, 1.0]
+    target_approval_minority = np.clip(target_approval_minority, 0.0, 1.0)
+    
+    # Find new threshold for minority group
+    probs_minority = y_pred_proba[sensitive_attr == minority_group]
+    
+    if len(probs_minority) == 0:
+        minority_thresh = global_threshold
+    else:
+        # Quantile expects value between 0 and 1. 
+        # If target approval is T, we want top T fraction to be 1, so threshold is at quantile (1 - T).
+        quantile_level = np.clip(1.0 - target_approval_minority, 0.0, 1.0)
+        minority_thresh = float(np.quantile(probs_minority, quantile_level))
+    
+    # Apply thresholds
+    group_thresholds = {str(majority_group): global_threshold, str(minority_group): minority_thresh}
+    
+    adjusted_preds = np.zeros_like(y_pred_proba, dtype=int)
+    
+    for g in groups:
+        mask = sensitive_attr == g
+        thresh = group_thresholds[str(g)]
+        adjusted_preds[mask] = (y_pred_proba[mask] >= thresh).astype(int)
+        
+    return adjusted_preds, group_thresholds

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 import catboost as cb
-import xgboost as xgb
+import xgboost as xgb_lib
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
@@ -16,6 +16,8 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
     uncorrelated base learners via a convex combination learned by 
     logistic regression. Stacking reduces variance: Var(avg) = σ²/n 
     only if uncorrelated. Enforced diversity via different algorithms.
+    
+    n_folds: Default 5 (industry standard for cross-validation on datasets of this size)
     """
     kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     
@@ -31,10 +33,11 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
     
     # --- Hyperparameters derived via Bayesian optimization bounds ---
     # LightGBM: leaf-wise growth, DART dropout for regularization
+    num_leaves_raw = int(2 ** np.floor(np.log2(max(len(X) ** 0.5, 4))))
     lgb_params = {
         "objective": "binary",
         "boosting_type": "dart",
-        "num_leaves": int(2 ** np.floor(np.log2(len(X) ** 0.5))),  # math: sqrt(n) rule
+        "num_leaves": max(8, num_leaves_raw),  # min 8 leaves to prevent lgb error
         "learning_rate": 0.05,
         "feature_fraction": 0.8,
         "bagging_fraction": 0.8,
@@ -67,12 +70,15 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "scale_pos_weight": spw,
-        "use_label_encoder": False,
         "eval_metric": "auc",
         "early_stopping_rounds": 30,
         "random_state": 42,
     }
     
+    XGB_VERSION = tuple(int(x) for x in xgb_lib.__version__.split(".")[:2])
+    if XGB_VERSION < (1, 6):
+        xgb_params["use_label_encoder"] = False
+        
     base_models_per_fold = {"xgb": [], "lgb": [], "cat": []}
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
@@ -80,7 +86,7 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
         y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
         
         # XGBoost
-        m_xgb = xgb.XGBClassifier(**xgb_params)
+        m_xgb = xgb_lib.XGBClassifier(**xgb_params)
         m_xgb.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
         oof_xgb[val_idx] = m_xgb.predict_proba(X_val)[:, 1]
         base_models_per_fold["xgb"].append(m_xgb)
@@ -101,13 +107,20 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
         oof_cat[val_idx] = m_cat.predict_proba(X_val)[:, 1]
         base_models_per_fold["cat"].append(m_cat)
         
-        print(f"Fold {fold+1} — XGB: {roc_auc_score(y_val, oof_xgb[val_idx]):.4f} "
-              f"LGB: {roc_auc_score(y_val, oof_lgb[val_idx]):.4f} "
-              f"CAT: {roc_auc_score(y_val, oof_cat[val_idx]):.4f}")
+        if len(np.unique(y_val)) > 1:
+            auc_xgb = roc_auc_score(y_val, oof_xgb[val_idx])
+            auc_lgb = roc_auc_score(y_val, oof_lgb[val_idx])
+            auc_cat = roc_auc_score(y_val, oof_cat[val_idx])
+            print(f"Fold {fold+1} — XGB: {auc_xgb:.4f} "
+                  f"LGB: {auc_lgb:.4f} "
+                  f"CAT: {auc_cat:.4f}")
+        else:
+            print(f"Fold {fold+1} — (Undefined AUC due to single class in validation fold)")
     
-    print(f"\nOOF AUCs — XGB: {roc_auc_score(y, oof_xgb):.4f} "
-          f"LGB: {roc_auc_score(y, oof_lgb):.4f} "
-          f"CAT: {roc_auc_score(y, oof_cat):.4f}")
+    if len(np.unique(y)) > 1:
+        print(f"\nOOF AUCs — XGB: {roc_auc_score(y, oof_xgb):.4f} "
+              f"LGB: {roc_auc_score(y, oof_lgb):.4f} "
+              f"CAT: {roc_auc_score(y, oof_cat):.4f}")
     
     # Meta-learner: Logistic Regression on OOF predictions
     meta_X = np.column_stack([oof_xgb, oof_lgb, oof_cat])
@@ -115,9 +128,13 @@ def train_stacked_ensemble(X: pd.DataFrame, y: pd.Series, n_folds: int = 5):
     meta_model.fit(meta_X, y)
     
     ensemble_preds = meta_model.predict_proba(meta_X)[:, 1]
-    ensemble_auc = roc_auc_score(y, ensemble_preds)
-    print(f"\nStacked Ensemble OOF AUC: {ensemble_auc:.4f}")
-    
+    if len(np.unique(y)) > 1:
+        ensemble_auc = roc_auc_score(y, ensemble_preds)
+        print(f"\nStacked Ensemble OOF AUC: {ensemble_auc:.4f}")
+    else:
+        ensemble_auc = float('nan')
+        print("\nStacked Ensemble OOF AUC: Undefined")
+        
     # Save all artifacts
     os.makedirs("model/artifacts", exist_ok=True)
     pickle.dump(base_models_per_fold, open("model/artifacts/base_models.pkl", "wb"))

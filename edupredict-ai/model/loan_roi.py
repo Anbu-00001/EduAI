@@ -59,11 +59,12 @@ Mathematical framework:
 import numpy as np
 import pandas as pd
 import json
-import os
 import logging
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+
+from config import DomainConstants
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +75,9 @@ def _load_salary_scale() -> float:
         ranges = json.loads(Path("model/artifacts/feature_ranges.json").read_text())
         sal_max_norm = ranges["median_salary_normalized"][1]  # max of normalized
         # Inverse normalisation: derive approximate INR scale
-        # The normalisation was salary / max_salary → so max_norm ≈ 1.0 for max salary
-        # Approximate max salary from NIRF data: ₹25L/yr for top fields
         return 2_500_000.0   # ₹25L — documented assumption, not hardcoded label
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load salary scale: {e}. Defaulting to 2,500,000 INR.")
         return 2_500_000.0
 
 
@@ -98,16 +98,13 @@ def _load_salary_growth_rate(field: str) -> float:
       min observed velocity maps to -0.10 growth penalty
     """
     try:
-        cache = json.loads(Path("data/pipeline/demand_cache.json").read_text())
-        records = {r["field"]: r for r in cache["records"]}
-        
-        # Load velocity from history
         from model.temporal_features import compute_demand_velocity
         vel_df = compute_demand_velocity()
         field_vel = vel_df[vel_df["field"] == field]
         
         if field_vel.empty:
-            return 0.08  # 8% base growth (documented: India avg IT salary growth)
+            logger.info(f"No velocity data for field '{field}'. Using base growth 8%.")
+            return 0.08  # 8% base growth
         
         velocity = float(field_vel.iloc[0]["demand_velocity_per_day"])
         r2 = float(field_vel.iloc[0]["velocity_r_squared"])
@@ -119,7 +116,7 @@ def _load_salary_growth_rate(field: str) -> float:
         # Scale: map velocity range to growth rate range
         all_velocities = vel_df["demand_velocity_per_day"].values
         v_min, v_max = all_velocities.min(), all_velocities.max()
-        v_range = (v_max - v_min) + 1e-9
+        v_range = max((v_max - v_min), 1e-9)
         
         # Normalise to [-0.10, +0.15] contribution
         v_norm = (velocity - v_min) / v_range          # [0, 1]
@@ -128,8 +125,6 @@ def _load_salary_growth_rate(field: str) -> float:
         base_rate = 0.08   # 8% India average — from RBI/ILO salary data
         growth_rate = float(np.clip(base_rate + contribution, 0.03, 0.25))
         
-        logger.info(f"Field '{field}' salary growth rate: {growth_rate:.3f} "
-                    f"(velocity={velocity:.2f}, R²={r2:.3f})")
         return growth_rate
         
     except Exception as e:
@@ -209,7 +204,8 @@ def compute_loan_roi(
         ratios_dist = typical_emi / salary_vals
         p30 = float(np.percentile(ratios_dist, 30))
         p50 = float(np.percentile(ratios_dist, 50))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load empirical FOIR percentiles: {e}. Defaulting to p30=0.30, p50=0.50")
         p30, p50 = 0.30, 0.50   # RBI FOIR guideline documented defaults
     
     year1_ratio = ratios[0]
@@ -221,7 +217,11 @@ def compute_loan_roi(
         serviceability = "DEBT_TRAP_RISK"
     
     # Break-even year (numerical search)
-    repo_rate = float(os.environ.get("RBI_REPO_RATE", "0.065"))
+    from config import EnvConfig
+    try:
+        repo_rate = EnvConfig.RBI_REPO_RATE()
+    except:
+        repo_rate = 0.065
     
     break_even = None
     cumulative_net = 0.0

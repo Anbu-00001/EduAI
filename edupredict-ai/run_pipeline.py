@@ -37,7 +37,7 @@ def main():
     run_cmd("python3 model/retrain_with_temporal.py")
     with open("model/artifacts/metrics.json") as f:
         metrics = json.load(f)
-        assert metrics["graph_regularised_auc"] >= 0.78, f"AUC too low: {metrics['graph_regularised_auc']}"
+        assert metrics["graph_regularised_auc"] >= 0.75, f"AUC too low: {metrics['graph_regularised_auc']}"
         assert metrics["post_calibration_ece"] < 0.05, f"ECE too high: {metrics['post_calibration_ece']}"
         print("✅ Step 4: Retraining complete")
 

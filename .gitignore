@@ -10,3 +10,16 @@ merged_cols.txt
 check_output.txt
 .kaggle/
 catboost_info/
+
+# Logs and databases
+*.log
+*.db
+*.db.bak
+
+# MLflow
+mlruns/
+
+# Data pipeline cache/history
+edupredict-ai/data/pipeline/history/
+edupredict-ai/data/pipeline/demand_cache.json
+edupredict-ai/data/pipeline/source_stats.json

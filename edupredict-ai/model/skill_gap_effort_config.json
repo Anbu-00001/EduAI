@@ -1,0 +1,66 @@
+{
+  "cgpa_normalized": {
+    "effort_score": 8,
+    "time_months": 12,
+    "action_template": "Improve CGPA from {orig:.1f}/10 to {target:.1f}/10 through consistent exam performance",
+    "feasibility": "HIGH if in Year 1-2, MEDIUM if in Year 3-4, LOW if graduated",
+    "resources": [
+      "College academic support",
+      "Study groups",
+      "Online tutoring"
+    ]
+  },
+  "internships_count": {
+    "effort_score": 3,
+    "time_months": 3,
+    "action_template": "Complete {delta:.0f} additional internship(s) \u2014 target companies with structured programmes",
+    "feasibility": "HIGH for any student",
+    "resources": [
+      "LinkedIn Jobs (filter: Internship, India)",
+      "Internshala.com",
+      "AICTE internship portal"
+    ]
+  },
+  "backlogs": {
+    "effort_score": 6,
+    "time_months": 6,
+    "action_template": "Clear {delta:.0f} backlog(s) in upcoming supplementary exams",
+    "feasibility": "HIGH \u2014 supplementary exams available for all backlogs",
+    "resources": [
+      "Previous year papers",
+      "College tutors"
+    ]
+  },
+  "potential_score": {
+    "effort_score": 5,
+    "time_months": 6,
+    "action_template": "Build {delta:.0f} additional projects relevant to {field}",
+    "feasibility": "HIGH for all students",
+    "resources": [
+      "GitHub \u2014 contribute to open source",
+      "Kaggle competitions for data science",
+      "Hackathons on Devfolio"
+    ]
+  },
+  "placement_rate_for_field": {
+    "effort_score": 9,
+    "time_months": 0,
+    "action_template": "Consider institution with higher placement rate ({orig:.0%} \u2192 {target:.0%})",
+    "feasibility": "LOW \u2014 cannot change institution easily",
+    "resources": [
+      "NIRF Rankings",
+      "Shiksha.com placement data"
+    ]
+  },
+  "demand_proxy": {
+    "effort_score": 7,
+    "time_months": 18,
+    "action_template": "Transition to adjacent high-demand field \u2014 add certifications in {field} specialisation",
+    "feasibility": "MEDIUM \u2014 requires 6\u201318 months upskilling",
+    "resources": [
+      "Coursera Google Career Certificates",
+      "NPTEL certification courses",
+      "Skill India digital platform"
+    ]
+  }
+}

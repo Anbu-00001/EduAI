@@ -18,18 +18,17 @@ import time
 import logging
 from fastapi import HTTPException, Request
 import redis.asyncio as aioredis
-import os
+from config import EnvConfig
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 _redis_client = None
 
 
 async def get_redis():
     global _redis_client
     if _redis_client is None:
-        _redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        _redis_client = aioredis.from_url(EnvConfig.REDIS_URL(), decode_responses=True)
     return _redis_client
 
 
@@ -74,4 +73,9 @@ async def check_rate_limit(tenant_id: str, limit_rpm: int, request: Request):
         raise
     except Exception as e:
         # Redis unavailable — fail open (don't block requests)
+        # MUST set state attributes to prevent AttributeError in middleware
+        request.state.rate_limit_remaining = limit_rpm
+        request.state.rate_limit_reset = int(time.time()) + 60
+        request.state.rate_limit_limit = limit_rpm
+        
         logger.error(f"Rate limiter error (failing open): {e}")

@@ -38,7 +38,9 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-NIRF_DATA_PATH = Path("data/raw/nirf")
+# Fix file path fragility
+ROOT_DIR = Path(__file__).parent.parent
+NIRF_DATA_PATH = ROOT_DIR / "data" / "raw" / "nirf"
 
 
 def load_nirf_college_data() -> pd.DataFrame:
@@ -52,15 +54,15 @@ def load_nirf_college_data() -> pd.DataFrame:
     if not files:
         logger.warning("NIRF data not found — downloading")
         import subprocess
-        # Note: This requires kaggle API credentials which might not be present.
-        # The code is robust to empty dfs.
         try:
             subprocess.run([
                 "kaggle", "datasets", "download",
                 "-d", "iitanshravan/nirf-rankings-dataset-20162025",
                 "-p", str(NIRF_DATA_PATH), "--unzip"
-            ], capture_output=True)
+            ], capture_output=True, check=True)
             files = sorted(glob.glob(str(NIRF_DATA_PATH / "**/*.csv"), recursive=True))
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Kaggle download failed with code {e.returncode}: {e.stderr.decode()}")
         except Exception as e:
             logger.warning(f"Kaggle download failed: {e}")
     
@@ -113,7 +115,8 @@ def score_college(
     """
     # Derive median salary for field from demand cache
     try:
-        cache = json.loads(Path("data/pipeline/demand_cache.json").read_text())
+        cache_path = ROOT_DIR / "data" / "pipeline" / "demand_cache.json"
+        cache = json.loads(cache_path.read_text())
         field_record = next(
             (r for r in cache["records"] if r["field"] == field), None
         )
@@ -125,8 +128,10 @@ def score_college(
             salary_min, salary_max = 300_000, 1_800_000
             median_salary = salary_min + d_norm * (salary_max - salary_min)
         else:
+            logger.info(f"Field '{field}' not found in demand cache, using default salary.")
             median_salary = 600_000  # ₹6L documented India avg fresh grad salary
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load demand cache for salary derivation: {e}")
         median_salary = 600_000
 
     # ROI Index: (placement_rate * salary) / tuition
@@ -134,15 +139,17 @@ def score_college(
     
     # Tier boundaries from training data distribution
     try:
-        feature_df = pd.read_csv("data/processed/features.csv")
+        feature_path = ROOT_DIR / "data" / "processed" / "features.csv"
+        feature_df = pd.read_csv(feature_path)
         # Proxy ROI index from existing features
         placement_vals = feature_df["placement_rate_for_field"].values
         # Using a fixed max salary for proxy calculation consistent with compute_loan_roi
         salary_vals = feature_df["median_salary_normalized"].values * 1_800_000
-        roi_vals = placement_vals * salary_vals / annual_tuition_inr
+        roi_vals = placement_vals * salary_vals / max(annual_tuition_inr, 1.0)
         p33 = float(np.percentile(roi_vals, 33))
         p67 = float(np.percentile(roi_vals, 67))
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load empirical ROI percentiles: {e}. Using defaults.")
         p33, p67 = 1.0, 3.0   # Documented reasonable defaults
     
     if roi_index >= p67:
@@ -167,7 +174,7 @@ def score_college(
     if r_m > 1e-9:
         emi_monthly = loan_amount_inr * r_m * (1+r_m)**n / ((1+r_m)**n - 1)
     else:
-        emi_monthly = loan_amount_inr / n
+        emi_monthly = loan_amount_inr / max(n, 1)
     emi_to_salary = (emi_monthly * 12) / (median_salary + 1e-9)
     debt_trap = bool(emi_to_salary > 0.50)
     

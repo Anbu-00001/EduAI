@@ -43,7 +43,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-EFFORT_CONFIG_PATH = Path("model/skill_gap_effort_config.json")
+# Fix file path fragility (Category 9)
+EFFORT_CONFIG_PATH = Path(__file__).parent / "skill_gap_effort_config.json"
 
 DEFAULT_EFFORT_CONFIG = {
     "cgpa_normalized": {
@@ -110,9 +111,17 @@ DEFAULT_EFFORT_CONFIG = {
 def load_effort_config() -> dict:
     """Load effort configuration. Create from default if not exists."""
     if not EFFORT_CONFIG_PATH.exists():
-        EFFORT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        EFFORT_CONFIG_PATH.write_text(json.dumps(DEFAULT_EFFORT_CONFIG, indent=2))
-    return json.loads(EFFORT_CONFIG_PATH.read_text())
+        try:
+            EFFORT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            EFFORT_CONFIG_PATH.write_text(json.dumps(DEFAULT_EFFORT_CONFIG, indent=2))
+        except Exception as e:
+            logger.warning(f"Could not create effort config: {e}. Using defaults.")
+            return DEFAULT_EFFORT_CONFIG
+    try:
+        return json.loads(EFFORT_CONFIG_PATH.read_text())
+    except Exception as e:
+        logger.warning(f"Could not read effort config: {e}. Using defaults.")
+        return DEFAULT_EFFORT_CONFIG
 
 
 @dataclass
@@ -215,8 +224,7 @@ def generate_skill_gap_report(
         action_text = cfg["action_template"].format(
             orig=original_val * 10 if "cgpa" in feat else original_val,
             target=target_val * 10 if "cgpa" in feat else target_val,
-            delta=abs(delta) if "internship" in feat or "backlog" in feat
-                  else abs(delta),
+            delta=abs(delta),
             field=field.replace("_", " ")
         )
         
