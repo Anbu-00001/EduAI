@@ -61,6 +61,25 @@ jobs:
           print('All artifact checks passed')
           "
       
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: app/ui
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+        working-directory: app/ui
+
+      - name: Build frontend (Vite → app/api/static)
+        run: npm run build
+        working-directory: app/ui
+
       - name: Build Docker image
         run: docker build -t edupredict-ai:${{ github.sha }} .
 

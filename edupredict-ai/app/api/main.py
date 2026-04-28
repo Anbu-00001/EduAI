@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict
 import numpy as np
 import pickle, json, os, uuid, time
@@ -128,13 +128,170 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/v1/admin/live-metrics")
+async def get_live_metrics(request: Request, tenant: dict = Depends(get_current_tenant)):
+    """
+    Proxy Prometheus metrics for the admin panel React component.
+    Avoids Grafana iframe embedding (which has auth/CSP issues).
+    Returns a flat dict of current metric values.
+    Polls every 15s from frontend (matches Prometheus scrape_interval).
+    """
+    prom_url = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
+    
+    queries = {
+        "auc":             "edupredict_current_auc",
+        "ece":             "edupredict_current_ece",
+        "dpi":             "edupredict_fairness_dpi",
+        "predictions_1h":  "increase(edupredict_predictions_total[1h])",
+        "cache_age_hours": "edupredict_demand_cache_age_hours",
+        "macro_fallbacks": "edupredict_macro_fallback_total",
+        "drift_psi":       "edupredict_max_feature_psi",
+        "p50_latency_ms":  "histogram_quantile(0.50,rate(http_request_duration_seconds_bucket[5m]))*1000",
+        "p99_latency_ms":  "histogram_quantile(0.99,rate(http_request_duration_seconds_bucket[5m]))*1000",
+    }
+    
+    results = {}
+    import httpx
+    async with httpx.AsyncClient() as client:
+        for key, query in queries.items():
+            try:
+                r = await client.get(
+                    f"{prom_url}/api/v1/query",
+                    params={"query": query},
+                    timeout=2.0
+                )
+                data = r.json()
+                if data.get("status") == "success" and data["data"]["result"]:
+                    results[key] = float(data["data"]["result"][0]["value"][1])
+                else:
+                    results[key] = None
+            except Exception:
+                results[key] = None
+    
+    # Load static model metrics as fallback when Prometheus is unavailable
+    static_metrics = {}
+    try:
+        static_metrics = json.loads(Path("model/artifacts/metrics.json").read_text())
+    except Exception:
+        pass
+    
+    return {
+        "live": results,
+        "static": {
+            "auc": static_metrics.get("graph_regularised_auc"),
+            "ece": static_metrics.get("post_calibration_ece"),
+            "train_size": static_metrics.get("train_size"),
+            "model_version": static_metrics.get("model_version"),
+            "n_features": static_metrics.get("n_features_v4", 14),
+        },
+        "grafana_url": os.environ.get("GRAFANA_URL", "http://localhost:3000"),
+        "prometheus_url": prom_url,
+    }
+
+@app.post("/v1/admin/retrain")
+async def trigger_retrain(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    tenant: dict = Depends(get_current_tenant)
+):
+    """Trigger a background model retrain. Admin-only."""
+    if tenant.get("tenant_id") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    import subprocess
+    def _retrain():
+        subprocess.Popen(
+            ["python3", "run_pipeline.py", "--retrain"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    
+    background_tasks.add_task(_retrain)
+    return {"status": "retrain_scheduled", "message": "Retraining started in background. Check logs for progress."}
+
 app.mount("/static", StaticFiles(directory="app/api/static"), name="static")
+
+from fastapi.responses import HTMLResponse
 
 @app.get("/")
 async def serve_home():
-    return FileResponse("app/api/static/index.html")
+    """Serve the Vite-built React SPA. API key is managed via sessionStorage — no server injection needed."""
+    index_path = Path("app/api/static/index.html")
+    if not index_path.exists():
+        return HTMLResponse(content="<h2>Frontend not built. Run: make build-ui</h2>", status_code=503)
+    return HTMLResponse(content=index_path.read_text())
+
+
+@app.get("/v1/data/freshness")
+async def data_freshness(request: Request, tenant: dict = Depends(get_current_tenant)):
+    """
+    Returns data source freshness status for the FreshnessPanel component.
+    Reads from the demand_cache.json written by the data acquisition scheduler.
+    """
+    cache_path = Path("data/pipeline/demand_cache.json")
+    if not cache_path.exists():
+        return {
+            "sources": [
+                {"name": "naukri", "freshness_weight": 0.45, "reliability_score": 0.0, "last_fetched_unix": 0},
+                {"name": "linkedin", "freshness_weight": 0.45, "reliability_score": 0.0, "last_fetched_unix": 0},
+                {"name": "datagov", "freshness_weight": 0.10, "reliability_score": 0.72, "last_fetched_unix": 0},
+            ],
+            "cache_age_h": 999.0,
+            "status": "critical",
+        }
+    try:
+        cache = json.loads(cache_path.read_text())
+        # demand_cache.json uses 'generated_at' (ISO string from pipeline)
+        import datetime as dt
+        generated_at_str = cache.get("generated_at") or cache.get("fetched_at")
+        if generated_at_str:
+            try:
+                generated_at_ts = dt.datetime.fromisoformat(str(generated_at_str)).timestamp()
+            except Exception:
+                generated_at_ts = 0
+        else:
+            generated_at_ts = 0
+        cache_age_h = (time.time() - generated_at_ts) / 3600.0 if generated_at_ts else 999.0
+        status = "fresh" if cache_age_h < 6 else "stale" if cache_age_h < 24 else "critical"
+        sources = [
+            {"name": "naukri", "freshness_weight": 0.45,
+             "reliability_score": max(0.0, 1.0 - cache_age_h / 48),
+             "last_fetched_unix": int(generated_at_ts)},
+            {"name": "linkedin", "freshness_weight": 0.45,
+             "reliability_score": max(0.0, 1.0 - cache_age_h / 48),
+             "last_fetched_unix": int(generated_at_ts)},
+            {"name": "datagov", "freshness_weight": 0.10,
+             "reliability_score": 0.72,
+             "last_fetched_unix": int(generated_at_ts)},
+        ]
+        return {"sources": sources, "cache_age_h": round(cache_age_h, 2), "status": status}
+    except Exception as e:
+        logger.warning(f"data_freshness: {e}")
+        return {"sources": [], "cache_age_h": 999.0, "status": "critical"}
+
+
+@app.post("/v1/data/refresh")
+async def trigger_data_refresh(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    tenant: dict = Depends(get_current_tenant)
+):
+    """
+    Triggers a background data acquisition run (scraper + DAG).
+    Responds immediately — refresh happens asynchronously.
+    """
+    import subprocess
+    def _refresh():
+        subprocess.Popen(
+            ["python3", "-c",
+             "from scrapers.naukri_scraper import run_scraper; run_scraper()"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    background_tasks.add_task(_refresh)
+    return {"status": "refresh_scheduled", "message": "Data refresh started in background. Updates in ~5 minutes."}
 
 class StudentProfile(BaseModel):
+    model_config = ConfigDict(extra="ignore")  # Accepts has_consent/cgpa_verified/institution_verified from frontend without 422
     cgpa: float = Field(..., ge=0.0, le=10.0)
     internships_count: int = Field(..., ge=0, le=10)
     backlogs: int = Field(..., ge=0, le=20)
@@ -142,7 +299,7 @@ class StudentProfile(BaseModel):
     college_placement_rate: float = Field(..., ge=0.0, le=100.0)
     loan_amount_inr: float = Field(..., ge=10000.0)
     annual_family_income_inr: Optional[float] = Field(None, ge=0)
-    user_hash: Optional[str] = Field(None, validate_default=True) # For DPDP consent check
+    user_hash: Optional[str] = Field(None, validate_default=True)  # DPDP consent check
     
     @field_validator("field_of_study")
     @classmethod
@@ -222,7 +379,8 @@ def build_features(profile: StudentProfile, demand_lookup: dict, velocity_lookup
         cgpa_norm, profile.internships_count, profile.backlogs,
         salary_norm, potential_score, demand_proxy,
         placement_rate_norm, v_data["velocity"], v_data["accel"],
-        v_data["r2"], momentum, market_hhi, macro_index, 0
+        v_data["r2"], momentum, market_hhi, macro_index,
+        0  # [13] backlogs_missing=0 for inference (user-reported)
     ])
 
 def generate_adverse_action_notice(shap_contributions: dict, risk_tier: str) -> Optional[dict]:

@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output (tracked separately via make build-ui)
+# DO NOT add ../api/static/ here — Vite build output must be committed
+
+# Env files — only example is committed
+.env
+.env.local
+.env.production
+
+# Editor
+.DS_Store
+*.swp

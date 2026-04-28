@@ -146,6 +146,15 @@ class EnvConfig:
         "JANPARICHAY_REDIRECT_URI", "http://localhost:8000/v1/auth/callback",
         "OAuth2 redirect URI. Must match exactly what is registered at meripehchaan.gov.in."
     )
+    
+    PROMETHEUS_URL = lambda: EnvConfig.optional(
+        "PROMETHEUS_URL", "http://localhost:9090",
+        "Prometheus instance URL for admin metrics proxy"
+    )
+    GRAFANA_URL = lambda: EnvConfig.optional(
+        "GRAFANA_URL", "http://localhost:3000",
+        "Grafana instance URL. Linked from admin panel (not embedded)."
+    )
 
 
 # ── Data-Derived Constants (computed at training time, loaded at runtime) ──
