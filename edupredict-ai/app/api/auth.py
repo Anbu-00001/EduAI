@@ -56,6 +56,17 @@ def generate_api_key() -> tuple[str, str]:
     return plaintext, hash_api_key(plaintext)
 
 
+
+def create_student_jwt_token(user_hash: str) -> tuple[str, int]:
+    expires_in_seconds = 4 * 3600
+    payload = {
+        "sub": user_hash,
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=4),
+        "type": "student",
+    }
+    return jwt.encode(payload, EnvConfig.JWT_SECRET(), algorithm=JWT_ALGORITHM), expires_in_seconds
+
 def create_jwt_token(tenant_id: str) -> str:
     payload = {
         "sub": tenant_id,
@@ -111,12 +122,21 @@ async def get_current_tenant(
 
     if credentials:
         payload = verify_jwt_token(credentials.credentials)
-        return {
-            "tenant_id": payload["sub"],
-            "rate_limit_rpm": int(EnvConfig.optional("RATE_LIMIT_DEFAULT_RPM", "100", "default rpm")),
-            "permissions": ["admin"] if payload["sub"] == "admin" else ["assess"],
-            "auth_method": "jwt",
-        }
+        if payload.get("type") == "student":
+            return {
+                "tenant_id": payload["sub"],
+                "role": "student",
+                "rate_limit_rpm": 20,
+                "permissions": ["assess"],
+                "auth_method": "jwt",
+            }
+        else:
+            return {
+                "tenant_id": payload["sub"],
+                "rate_limit_rpm": int(EnvConfig.optional("RATE_LIMIT_DEFAULT_RPM", "100", "default rpm")),
+                "permissions": ["admin"] if payload["sub"] == "admin" else ["assess"],
+                "auth_method": "jwt",
+            }
 
     raise HTTPException(
         status_code=401,

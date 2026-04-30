@@ -12,11 +12,14 @@ export const apiClient = axios.create({
 apiClient.interceptors.request.use((config) => {
   const apiKey = sessionStorage.getItem('ep_api_key')
   const jwtToken = sessionStorage.getItem('ep_jwt')
+  const studentJwt = sessionStorage.getItem('ep_student_jwt')
   
   if (apiKey) {
     config.headers['X-API-Key'] = apiKey
   } else if (jwtToken) {
     config.headers['Authorization'] = `Bearer ${jwtToken}`
+  } else if (studentJwt) {
+    config.headers['Authorization'] = `Bearer ${studentJwt}`
   }
   return config
 })

@@ -300,6 +300,21 @@ async def trigger_data_refresh(
     background_tasks.add_task(_refresh)
     return {"status": "refresh_scheduled", "message": "Data refresh started in background. Updates in ~5 minutes."}
 
+
+class StudentSessionRequest(BaseModel):
+    user_hash: str
+
+@app.post("/v1/auth/student-session")
+@limiter.limit("10/minute")
+async def create_student_session(req: StudentSessionRequest, request: Request):
+    from app.api.auth import create_student_jwt_token
+    token, expires_in = create_student_jwt_token(req.user_hash)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": expires_in
+    }
+
 class ConsentBlock(BaseModel):
     data_sources: List[str]
     notice_version: str = "1.0"
@@ -832,8 +847,16 @@ async def student_college_roi(
 
 
 @app.get("/v1/health")
-async def health():
-    return {"status": "ok", "version": "5.0.0"}
+async def health(request: Request):
+    auc = None
+    version = "unknown"
+    try:
+        if hasattr(request.app.state, 'metrics'):
+            auc = request.app.state.metrics.get('graph_regularised_auc')
+            version = request.app.state.metrics.get('model_version', "v5.0-production")
+    except Exception:
+        pass
+    return {"status": "ok", "version": "5.0.0", "model_auc": auc, "model_version": version}
 
 # SPA / Static Serving (Catch-all)
 # This MUST be last to avoid shadowing API routes

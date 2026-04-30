@@ -5,9 +5,9 @@ import { Loader2, ChevronLeft, Info } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { StudentProfileSchema, FIELDS, type StudentProfile } from '@/api/types'
 import { useAssess } from '@/hooks/useAssess'
-import { useAdminMetrics } from '@/hooks/useAdminMetrics'
 import { formatINR } from '@/lib/utils'
-import MetricsStrip from '@/components/MetricsStrip'
+import ModelHealthBadge from '@/components/ModelHealthBadge'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import RiskGauge from '@/components/RiskGauge'
 import ShapWaterfall from '@/components/ShapWaterfall'
 import ConformalInterval from '@/components/ConformalInterval'
@@ -32,7 +32,6 @@ const RISK_BORDER: Record<string, string> = {
 
 export default function LenderDashboard() {
   const navigate = useNavigate()
-  const { data: metricsData, isLoading: metricsLoading } = useAdminMetrics()
   const { mutate: assess, data: result, isPending, error, reset } = useAssess()
 
   const {
@@ -79,17 +78,17 @@ export default function LenderDashboard() {
               <p className="text-[10px] text-slate-500 uppercase tracking-widest">Lender Risk Dashboard</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
-            <span className="text-[10px] font-mono text-slate-500">AUTHENTICATED</span>
+          <div className="flex items-center gap-4">
+            <ModelHealthBadge />
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
+              <span className="text-[10px] font-mono text-slate-500">AUTHENTICATED</span>
+            </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Live Metrics Strip */}
-        <MetricsStrip data={metricsData} isLoading={metricsLoading} />
-
         {/* Main grid: form + results */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* ── INPUT FORM ── */}
@@ -244,7 +243,7 @@ export default function LenderDashboard() {
                     <p className="text-xs text-rose-text">{error.message}</p>
                   </div>
                   <button
-                    onClick={() => assess({ cgpa: 8, internships_count: 2, backlogs: 0, field_of_study: 'computer_science', college_placement_rate: 80, loan_amount_inr: 500000, has_consent: true, cgpa_verified: false, institution_verified: false })}
+                    onClick={() => assess({ cgpa: 8, internships_count: 2, backlogs: 0, field_of_study: 'computer_science', college_placement_rate: 80, loan_amount_inr: 500000, has_consent: true, cgpa_verified: false, institution_verified: false, consent: { data_sources: ['Academic Records'], notice_version: '1.0' } })}
                     className="mt-2 text-xs text-blue-text underline"
                   >
                     Retry
@@ -271,13 +270,15 @@ export default function LenderDashboard() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
                       {/* Left: Gauge */}
                       <div>
-                        <RiskGauge
-                          probability={result.calibrated_probability}
-                          tier={result.risk_tier}
-                          ciLow={result.confidence_interval_90pct.lower}
-                          ciHigh={result.confidence_interval_90pct.upper}
-                          isLoading={false}
-                        />
+                        <ErrorBoundary label="Risk Gauge">
+                          <RiskGauge
+                            probability={result.calibrated_probability}
+                            tier={result.risk_tier}
+                            ciLow={result.confidence_interval_90pct.lower}
+                            ciHigh={result.confidence_interval_90pct.upper}
+                            isLoading={false}
+                          />
+                        </ErrorBoundary>
                       </div>
 
                       {/* Right: Details */}
@@ -298,12 +299,14 @@ export default function LenderDashboard() {
                           </div>
                         </div>
 
-                        <ConformalInterval
-                          probability={result.calibrated_probability}
-                          ciLow={result.confidence_interval_90pct.lower}
-                          ciHigh={result.confidence_interval_90pct.upper}
-                          tier={result.risk_tier}
-                        />
+                        <ErrorBoundary label="Confidence Interval">
+                          <ConformalInterval
+                            probability={result.calibrated_probability}
+                            ciLow={result.confidence_interval_90pct.lower}
+                            ciHigh={result.confidence_interval_90pct.upper}
+                            tier={result.risk_tier}
+                          />
+                        </ErrorBoundary>
 
                         <div className="p-4 bg-card-2 rounded-2xl border border-border">
                           <p className="text-sm text-slate-300 leading-relaxed">{result.recommendation}</p>
@@ -321,18 +324,24 @@ export default function LenderDashboard() {
 
                   {/* SHAP chart */}
                   <div className="bg-card border border-border rounded-3xl p-6">
-                    <ShapWaterfall contributions={result.shap_contributions} />
+                    <ErrorBoundary label="SHAP Waterfall">
+                      <ShapWaterfall contributions={result.shap_contributions} />
+                    </ErrorBoundary>
                   </div>
 
                   {/* Freshness Panel */}
-                  <FreshnessPanel />
+                  <ErrorBoundary label="Data Freshness">
+                    <FreshnessPanel />
+                  </ErrorBoundary>
 
                   {/* Adverse Action */}
                   {result.adverse_action?.adverse_action_required && (
-                    <AdverseActionCard
-                      adverseAction={result.adverse_action}
-                      assessmentId={result.assessment_id}
-                    />
+                    <ErrorBoundary label="Adverse Action">
+                      <AdverseActionCard
+                        adverseAction={result.adverse_action}
+                        assessmentId={result.assessment_id}
+                      />
+                    </ErrorBoundary>
                   )}
                 </motion.div>
               ) : (

@@ -10,6 +10,14 @@ interface ProtectedRouteProps {
 export default function ProtectedRoute({ children, requireRole }: ProtectedRouteProps) {
   const apiKey = sessionStorage.getItem('ep_api_key')
   const jwt = sessionStorage.getItem('ep_jwt')
+  const studentJwt = sessionStorage.getItem('ep_student_jwt')
+
+  if (requireRole === 'student') {
+    if (!studentJwt) {
+      return <Navigate to="/" replace />
+    }
+    return <>{children}</>
+  }
 
   if (requireRole === 'lender') {
     if (!apiKey) {

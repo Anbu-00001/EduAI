@@ -4,6 +4,7 @@ import LenderDashboard from './pages/LenderDashboard'
 import StudentPortal from './pages/StudentPortal'
 import AdminOps from './pages/AdminOps'
 import ProtectedRoute from './components/ProtectedRoute'
+import NotFound from './pages/NotFound'
 
 function App() {
   return (
@@ -33,6 +34,9 @@ function App() {
         
         {/* Student Portal (may have demo mode without auth) */}
         <Route path="/student" element={<StudentPortal />} />
+
+        {/* 404 Route */}
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </Router>
   )
