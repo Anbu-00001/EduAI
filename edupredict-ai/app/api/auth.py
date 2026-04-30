@@ -19,6 +19,7 @@ Rate limiting is applied per API key (not per IP):
 
 import hashlib
 import secrets
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -30,6 +31,8 @@ import asyncpg
 from config import EnvConfig
 
 logger = logging.getLogger(__name__)
+
+VALID_PERMISSIONS = {"assess", "admin", "data_refresh"}
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 1
@@ -90,15 +93,19 @@ async def get_current_tenant(
         # Using DB lookup for API keys; timing attacks mitigated by hashing before query
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT tenant_id, rate_limit_rpm, active "
+                "SELECT tenant_id, rate_limit_rpm, permissions, active "
                 "FROM api_keys WHERE key_hash = $1",
                 key_hash
             )
         if not row or not row["active"]:
             raise HTTPException(status_code=401, detail="Invalid API key")
+            
+        perms = json.loads(row["permissions"]) if isinstance(row["permissions"], str) else row["permissions"]
+        
         return {
             "tenant_id": row["tenant_id"],
             "rate_limit_rpm": row["rate_limit_rpm"],
+            "permissions": perms,
             "auth_method": "api_key",
         }
 
@@ -106,7 +113,8 @@ async def get_current_tenant(
         payload = verify_jwt_token(credentials.credentials)
         return {
             "tenant_id": payload["sub"],
-            "rate_limit_rpm": EnvConfig.RATE_LIMIT_DEFAULT_RPM(),
+            "rate_limit_rpm": int(EnvConfig.optional("RATE_LIMIT_DEFAULT_RPM", "100", "default rpm")),
+            "permissions": ["admin"] if payload["sub"] == "admin" else ["assess"],
             "auth_method": "jwt",
         }
 

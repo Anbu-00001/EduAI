@@ -1,5 +1,6 @@
 import React from 'react'
 import { Navigate } from 'react-router-dom'
+import { parseJwt, isTokenExpired } from '@/lib/auth'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -21,14 +22,12 @@ export default function ProtectedRoute({ children, requireRole }: ProtectedRoute
     if (!jwt) {
       return <Navigate to="/" replace />
     }
-    // Very basic decode just for UI check (backend still verifies signature)
-    try {
-      const payloadBase64 = jwt.split('.')[1]
-      const payload = JSON.parse(atob(payloadBase64))
-      if (payload.tenant_id !== 'admin') {
-        return <Navigate to="/" replace />
-      }
-    } catch {
+    const payload = parseJwt(jwt)
+    if (!payload || isTokenExpired(payload)) {
+      sessionStorage.removeItem('ep_jwt')
+      return <Navigate to="/" replace />
+    }
+    if (payload.sub !== 'admin') {
       return <Navigate to="/" replace />
     }
     return <>{children}</>

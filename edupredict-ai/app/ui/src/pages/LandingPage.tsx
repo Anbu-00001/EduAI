@@ -22,6 +22,7 @@ export default function LandingPage() {
       return res.data
     },
     retry: false,
+    enabled: !!sessionStorage.getItem('ep_api_key'),
   })
 
   const { data: metrics } = useQuery<{ live: Record<string, number | null>; static: Record<string, number | null> }, Error>({
@@ -31,6 +32,7 @@ export default function LandingPage() {
       return res.data
     },
     retry: false,
+    enabled: !!sessionStorage.getItem('ep_api_key'),
   })
 
   const handleLenderSubmit = (e: React.FormEvent) => {

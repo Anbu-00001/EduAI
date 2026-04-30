@@ -6,6 +6,11 @@ export const FIELDS = [
   "civil_engineering", "biotechnology"
 ] as const
 
+export const ConsentBlockSchema = z.object({
+  data_sources: z.array(z.string()).min(1),
+  notice_version: z.string().default('1.0'),
+})
+
 export const StudentProfileSchema = z.object({
   cgpa:                     z.number().min(0).max(10, 'CGPA must be 0–10'),
   internships_count:        z.number().int().min(0).max(10),
@@ -20,9 +25,11 @@ export const StudentProfileSchema = z.object({
   }),
   cgpa_verified:            z.boolean().default(false),
   institution_verified:     z.boolean().default(false),
+  consent:                  ConsentBlockSchema,
 })
 
 export type StudentProfile = z.infer<typeof StudentProfileSchema>
+
 
 export interface AssessmentResponse {
   assessment_id:              string

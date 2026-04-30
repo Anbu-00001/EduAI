@@ -6,6 +6,8 @@ from pathlib import Path
 from model.data_builder import IndianStudentDataset
 from config import EnvConfig
 
+from model.feature_pipeline import FeaturePipeline
+
 logger = logging.getLogger(__name__)
 
 FEATURE_COLS_V5 = [
@@ -15,6 +17,8 @@ FEATURE_COLS_V5 = [
     "demand_acceleration", "velocity_r_squared", "demand_momentum", 
     "market_hhi", "macro_index", "backlogs_missing"
 ]
+
+assert FEATURE_COLS_V5 == FeaturePipeline.feature_names(), "Feature columns mismatch!"
 
 def add_temporal_features_static(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -62,13 +66,18 @@ def build_master_dataset(raw_data_dir):
             (NIRF_SALARY_P95_INR - NIRF_SALARY_P5_INR)
         ).clip(0, 1)
 
-    # Recompute potential_score using V5 logic (if not already present correctly)
-    # potential_score = 0.35*cgpa + 0.25*internships + 0.25*placement + 0.15*salary
-    df["potential_score"] = (
-        df["cgpa_normalized"] * 0.35 +
-        (df["internships_count"] / 3.0).clip(upper=1.0) * 0.25 +
-        df["placement_rate_for_field"] * 0.25 +
-        df["median_salary_normalized"] * 0.15
+    # Recompute potential_score using V5 logic
+    df["potential_score"] = FeaturePipeline.compute_potential_score(
+        df["cgpa_normalized"],
+        df["internships_count"],
+        df["placement_rate_for_field"],
+        df["median_salary_normalized"]
+    )
+    
+    # Update momentum if velocity is present
+    df["demand_momentum"] = FeaturePipeline.compute_momentum(
+        df["demand_proxy"],
+        np.clip((df["demand_velocity_per_day"] + 50) / 100, 0, 1)
     )
 
     # 5. Save

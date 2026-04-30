@@ -1,3 +1,5 @@
+# Copy .env.example → .env and fill in real values before running.
+# Never commit .env to version control.
 version: "3.9"
 services:
   api:
@@ -6,9 +8,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://edupredict:edupredict@db:5432/edupredict
-      - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=production_secret_change_me_1234567890
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+    env_file: .env
     volumes:
       - .:/app
     depends_on:
@@ -20,16 +23,16 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: edupredict
-      POSTGRES_USER: edupredict
-      POSTGRES_PASSWORD: edupredict
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./app/api/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U edupredict"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -53,7 +56,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=edupredict
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana

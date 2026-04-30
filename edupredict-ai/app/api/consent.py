@@ -70,7 +70,7 @@ CONSENT_NOTICE_TEXT = {
 
 
 async def record_consent(
-    db_pool,
+    conn_or_pool: asyncpg.Connection | asyncpg.Pool,
     user_hash: str,           # SHA-256 of (phone_number + salt) — never store raw PII
     consent_given: bool,
     ip_address: str,
@@ -85,21 +85,28 @@ async def record_consent(
         f"{user_hash}{time.time()}".encode()
     ).hexdigest()[:32]
 
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO consent_records 
-            (consent_id, user_hash, consent_given, notice_version,
-             data_sources, ip_hash, user_agent_hash, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        """,
-            consent_id,
-            user_hash,
-            consent_given,
-            CONSENT_NOTICE_VERSION,
-            json.dumps(data_sources),
-            hashlib.sha256(ip_address.encode()).hexdigest()[:16],
-            hashlib.sha256(user_agent.encode()).hexdigest()[:16],
-        )
+    query = """
+        INSERT INTO consent_records 
+        (consent_id, user_hash, consent_given, notice_version,
+         data_sources, ip_hash, user_agent_hash, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    """
+    params = (
+        consent_id,
+        user_hash,
+        consent_given,
+        CONSENT_NOTICE_VERSION,
+        json.dumps(data_sources),
+        hashlib.sha256(ip_address.encode()).hexdigest()[:16],
+        hashlib.sha256(user_agent.encode()).hexdigest()[:16],
+    )
+
+    if isinstance(conn_or_pool, asyncpg.Connection):
+        await conn_or_pool.execute(query, *params)
+    else:
+        async with conn_or_pool.acquire() as conn:
+            await conn.execute(query, *params)
+            
     return consent_id
 
 

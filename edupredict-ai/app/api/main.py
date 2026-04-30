@@ -10,7 +10,7 @@ import shap
 import logging
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
@@ -27,7 +27,10 @@ from prometheus_client import Counter, Histogram, Gauge
 
 # Phase 4 Modules
 from app.api.auth import get_current_tenant
-from app.api.rate_limit import check_rate_limit
+from app.api.rate_limit import check_rate_limit, limiter, create_redis_pool
+from slowapi.errors import RateLimitExceeded
+from fastapi.responses import JSONResponse
+from model.feature_pipeline import FeaturePipeline, TemporalFeatures, MarketFeatures
 from app.api.consent import check_consent, get_consent_notice
 from model.temporal_features import build_peer_cohort_graph, compute_macro_index
 from model.scheduler import create_scheduler
@@ -66,6 +69,18 @@ ADVERSE_ACTION_CODES = {
     "macro_index":               "AA-10: Unfavorable macroeconomic conditions",
 }
 
+
+async def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "detail": f"Too many requests. Limit: {exc.limit}",
+            "retry_after_seconds": 60,
+        },
+        headers={"Retry-After": "60"},
+    )
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan manager: loads models, starts scheduler, initializes DB pool."""
@@ -73,6 +88,7 @@ async def lifespan(app: FastAPI):
     from app.api.auth import hash_api_key
     
     app.state.db_pool = await asyncpg.create_pool(EnvConfig.DATABASE_URL())
+    app.state.redis = await create_redis_pool()
     
     # Initialize Demo Tenant & API Key for Dashboard
     async with app.state.db_pool.acquire() as conn:
@@ -111,6 +127,7 @@ async def lifespan(app: FastAPI):
     
     app.state.scheduler.shutdown()
     await app.state.db_pool.close()
+    await app.state.redis.aclose()
 
 app = FastAPI(
     title="EduPredict AI API",
@@ -118,6 +135,9 @@ app = FastAPI(
     version="5.0.0",
     lifespan=lifespan
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 Instrumentator().instrument(app).expose(app)
 
@@ -209,17 +229,7 @@ async def trigger_retrain(
     background_tasks.add_task(_retrain)
     return {"status": "retrain_scheduled", "message": "Retraining started in background. Check logs for progress."}
 
-app.mount("/static", StaticFiles(directory="app/api/static"), name="static")
 
-from fastapi.responses import HTMLResponse
-
-@app.get("/")
-async def serve_home():
-    """Serve the Vite-built React SPA. API key is managed via sessionStorage — no server injection needed."""
-    index_path = Path("app/api/static/index.html")
-    if not index_path.exists():
-        return HTMLResponse(content="<h2>Frontend not built. Run: make build-ui</h2>", status_code=503)
-    return HTMLResponse(content=index_path.read_text())
 
 
 @app.get("/v1/data/freshness")
@@ -289,6 +299,41 @@ async def trigger_data_refresh(
         )
     background_tasks.add_task(_refresh)
     return {"status": "refresh_scheduled", "message": "Data refresh started in background. Updates in ~5 minutes."}
+
+class ConsentBlock(BaseModel):
+    data_sources: List[str]
+    notice_version: str = "1.0"
+
+class AssessRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cgpa: float = Field(..., ge=0.0, le=10.0)
+    internships_count: int = Field(..., ge=0, le=10)
+    backlogs: int = Field(..., ge=0, le=20)
+    field_of_study: str = Field(...)
+    college_placement_rate: float = Field(..., ge=0.0, le=100.0)
+    loan_amount_inr: float = Field(..., ge=10000.0)
+    annual_family_income_inr: Optional[float] = Field(None, ge=0)
+    user_hash: str
+    has_consent: bool
+    cgpa_verified: bool = False
+    institution_verified: bool = False
+    consent: ConsentBlock
+
+    @field_validator("field_of_study")
+    @classmethod
+    def validate_field(cls, v):
+        from config import FIELD_QUERIES
+        valid = list(FIELD_QUERIES.keys())
+        if v not in valid:
+            raise ValueError(f"field_of_study must be one of {valid}")
+        return v
+
+    @field_validator("loan_amount_inr")
+    @classmethod
+    def validate_loan(cls, v):
+        if v > 5_000_000:
+            raise ValueError("loan_amount_inr capped at ₹50,00,000 for advisory mode")
+        return v
 
 class StudentProfile(BaseModel):
     model_config = ConfigDict(extra="ignore")  # Accepts has_consent/cgpa_verified/institution_verified from frontend without 422
@@ -360,28 +405,7 @@ class AssessmentResponse(BaseModel):
     model_version: str
     timestamp: str
 
-def build_features(profile: StudentProfile, demand_lookup: dict, velocity_lookup: dict, market_hhi: float, macro_index: float) -> np.ndarray:
-    cgpa_norm = profile.cgpa / 10.0
-    internship_weight = min(profile.internships_count / 3.0, 1.0)
-    demand_proxy = demand_lookup.get(profile.field_of_study, 0.5)
-    salary_norm = get_nirf_salary_norm(profile.field_of_study)
-    placement_rate_norm = profile.college_placement_rate / 100.0
-    potential_score = (0.35 * cgpa_norm + 0.25 * internship_weight + 0.25 * placement_rate_norm + 0.15 * salary_norm)
-    v_data = velocity_lookup.get(profile.field_of_study, {"velocity": 0.0, "accel": 0.0, "r2": 0.0})
-    v_scaled = np.clip((v_data["velocity"] + 50) / 100, 0, 1)
-    
-    # Using EWMA alpha
-    from model.temporal_features import _ewma_alpha
-    alpha = _ewma_alpha(2.0)
-    momentum = alpha * v_scaled + (1 - alpha) * demand_proxy
-    
-    return np.array([
-        cgpa_norm, profile.internships_count, profile.backlogs,
-        salary_norm, potential_score, demand_proxy,
-        placement_rate_norm, v_data["velocity"], v_data["accel"],
-        v_data["r2"], momentum, market_hhi, macro_index,
-        0  # [13] backlogs_missing=0 for inference (user-reported)
-    ])
+
 
 def generate_adverse_action_notice(shap_contributions: dict, risk_tier: str) -> Optional[dict]:
     if risk_tier != "RED": return None
@@ -401,13 +425,18 @@ async def log_api_call(db_pool, assessment_id, features_json, prediction, risk_t
             VALUES ($1, $2, $3, $4, $5)
         """, assessment_id, features_json, prediction, risk_tier, tenant_id)
 
+def _get_tenant_rate_limit(request: Request) -> int:
+    tenant = getattr(request.state, "tenant", None)
+    if tenant and tenant.get("rate_limit_rpm"):
+        return tenant["rate_limit_rpm"]
+    return int(EnvConfig.optional("RATE_LIMIT_DEFAULT_RPM", "100", "default rpm"))
+
 @app.post("/v1/assess", response_model=AssessmentResponse)
-async def assess_student(profile: StudentProfile, background_tasks: BackgroundTasks, request: Request, tenant: dict = Depends(get_current_tenant)):
-    # 0. Rate Limit & Consent Check
-    await check_rate_limit(tenant["tenant_id"], tenant["rate_limit_rpm"], request)
-    if profile.user_hash:
-        if not await check_consent(request.app.state.db_pool, profile.user_hash):
-            raise HTTPException(status_code=403, detail="DPDP Consent missing or withdrawn")
+@limiter.limit(lambda request: f"{_get_tenant_rate_limit(request)}/minute")
+async def assess_student(profile: AssessRequest, background_tasks: BackgroundTasks, request: Request, tenant: dict = Depends(get_current_tenant)):
+    # 0. Consent Check (Rate limit handled by decorator)
+    if not profile.has_consent:
+        raise HTTPException(status_code=422, detail="Explicit consent is required")
 
     # 1. Context Loading
     demand_lookup, velocity_lookup, market_hhi = {}, {}, 0.14
@@ -429,7 +458,27 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
         "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index", "backlogs_missing"
     ])
     
-    features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
+    temporal = TemporalFeatures(
+        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
+        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
+        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+    )
+    market = MarketFeatures(
+        demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),
+        market_hhi=market_hhi,
+        macro_index=macro_index
+    )
+    features = FeaturePipeline.transform(
+        cgpa=profile.cgpa,
+        internships_count=profile.internships_count,
+        backlogs=profile.backlogs,
+        field_of_study=profile.field_of_study,
+        college_placement_rate=profile.college_placement_rate,
+        salary_norm=get_nirf_salary_norm(profile.field_of_study),
+        temporal=temporal,
+        market=market,
+        backlogs_missing=0
+    )
     features_sc = app.state.scaler.transform(pd.DataFrame([features], columns=feature_names))
     
     # 2. Ensemble & Graph Inference
@@ -466,9 +515,30 @@ async def assess_student(profile: StudentProfile, background_tasks: BackgroundTa
     
     # 5. Monitoring & Logging
     assessment_id = str(uuid.uuid4())
+    from app.api.consent import record_consent
+    
+    async with request.app.state.db_pool.acquire() as conn:
+        async with conn.transaction():
+            consent_id = await record_consent(
+                conn,
+                profile.user_hash,
+                profile.has_consent,
+                request.client.host,
+                request.headers.get("user-agent", ""),
+                profile.consent.data_sources
+            )
+            features_json = json.dumps(dict(zip(feature_names, features.tolist())))
+            await conn.execute("""
+                INSERT INTO assessments (id, profile_data, calibrated_probability, risk_tier, shap_values)
+                VALUES ($1, $2, $3, $4, $5)
+            """, uuid.UUID(assessment_id), profile.model_dump_json(), cal_prob, risk_tier, json.dumps(shap_contributions))
+            await conn.execute("""
+                INSERT INTO api_calls (assessment_id, features_json, prediction, risk_tier, api_key_id)
+                VALUES ($1, $2, $3, $4, $5)
+            """, uuid.UUID(assessment_id), features_json, cal_prob, risk_tier, tenant["tenant_id"])
+
     PREDICTION_COUNTER.labels(risk_tier, profile.field_of_study, tenant["tenant_id"]).inc()
     PREDICTION_PROBABILITY.observe(cal_prob)
-    background_tasks.add_task(log_api_call, app.state.db_pool, assessment_id, json.dumps(dict(zip(feature_names, features.tolist()))), cal_prob, risk_tier, tenant["tenant_id"])
     
     recommendations = {
         "GREEN": "High repayment probability. Profile exhibits strong academic and market indicators. Approved for preferential interest rates.",
@@ -533,7 +603,27 @@ async def student_loan_roi(
     
     # Get repayment probability (reuses existing assessment logic)
     feature_names = app.state.metrics.get("feature_cols_v3", [])
-    features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
+    temporal = TemporalFeatures(
+        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
+        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
+        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+    )
+    market = MarketFeatures(
+        demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),
+        market_hhi=market_hhi,
+        macro_index=macro_index
+    )
+    features = FeaturePipeline.transform(
+        cgpa=profile.cgpa,
+        internships_count=profile.internships_count,
+        backlogs=profile.backlogs,
+        field_of_study=profile.field_of_study,
+        college_placement_rate=profile.college_placement_rate,
+        salary_norm=get_nirf_salary_norm(profile.field_of_study),
+        temporal=temporal,
+        market=market,
+        backlogs_missing=0
+    )
     features_sc = app.state.scaler.transform(
         pd.DataFrame([features], columns=feature_names)
     )
@@ -624,7 +714,27 @@ async def student_skill_gap(
     
     macro_index = compute_macro_index()
     feature_names = app.state.metrics.get("feature_cols_v3", [])
-    features = build_features(profile, demand_lookup, velocity_lookup, market_hhi, macro_index)
+    temporal = TemporalFeatures(
+        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
+        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
+        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+    )
+    market = MarketFeatures(
+        demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),
+        market_hhi=market_hhi,
+        macro_index=macro_index
+    )
+    features = FeaturePipeline.transform(
+        cgpa=profile.cgpa,
+        internships_count=profile.internships_count,
+        backlogs=profile.backlogs,
+        field_of_study=profile.field_of_study,
+        college_placement_rate=profile.college_placement_rate,
+        salary_norm=get_nirf_salary_norm(profile.field_of_study),
+        temporal=temporal,
+        market=market,
+        backlogs_missing=0
+    )
     features_sc = app.state.scaler.transform(
         pd.DataFrame([features], columns=feature_names)
     )
@@ -724,3 +834,24 @@ async def student_college_roi(
 @app.get("/v1/health")
 async def health():
     return {"status": "ok", "version": "5.0.0"}
+
+# SPA / Static Serving (Catch-all)
+# This MUST be last to avoid shadowing API routes
+app.mount("/assets", StaticFiles(directory="app/api/static/assets"), name="assets")
+
+@app.get("/{path_name:path}")
+async def serve_spa(path_name: str):
+    """
+    Catch-all route to serve the React SPA.
+    1. Try to serve specific files from static root (e.g. vite.svg, manifest.json)
+    2. Fallback to index.html for any other route (handles React Router paths)
+    """
+    static_file = Path("app/api/static") / path_name
+    if static_file.exists() and static_file.is_file():
+        return FileResponse(static_file)
+    
+    index_path = Path("app/api/static/index.html")
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text())
+    
+    return HTMLResponse(content="<h2>Frontend not built. Run: make build-ui</h2>", status_code=503)

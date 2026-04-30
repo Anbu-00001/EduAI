@@ -27,7 +27,10 @@ apiClient.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       sessionStorage.clear()
-      window.location.href = '/'
+      // Only redirect if we are not already on the landing page to prevent infinite loops
+      if (window.location.pathname !== '/') {
+        window.location.href = '/'
+      }
     }
     return Promise.reject(err)
   }

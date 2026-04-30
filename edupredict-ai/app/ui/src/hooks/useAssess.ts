@@ -11,18 +11,16 @@ export function useAssess() {
       sessionStorage.setItem('ep_session_id', sessionId)
       const userHash = await generateUserHash(sessionId)
 
-      // 1. Record consent
-      await apiClient.post('/consent', {
-        user_hash: userHash,
-        consent_given: true,
-        data_sources: ['Academic Records', 'Job Market Data', 'Gov Stats', 'Peer Cohort'],
-      })
-
-      // 2. Run assessment
-      const res = await apiClient.post<AssessmentResponse>('/assess', {
+      const payload = {
         ...profile,
         user_hash: userHash,
-      })
+        consent: {
+          data_sources: ['Academic Records', 'Job Market Data', 'Gov Stats', 'Peer Cohort'],
+          notice_version: '1.0',
+        },
+      }
+
+      const res = await apiClient.post<AssessmentResponse>('/assess', payload)
       return res.data
     },
   })

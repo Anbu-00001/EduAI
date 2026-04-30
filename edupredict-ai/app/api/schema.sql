@@ -51,9 +51,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
     id SERIAL PRIMARY KEY,
     tenant_id VARCHAR(50) NOT NULL,
     key_hash VARCHAR(64) UNIQUE NOT NULL,
-    rate_limit_rpm INTEGER DEFAULT 100,
-    active BOOLEAN DEFAULT TRUE,
+    rate_limit_rpm INTEGER NOT NULL DEFAULT 100,
+    permissions JSONB NOT NULL DEFAULT '["assess"]'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_api_keys_tenant ON api_keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash   ON api_keys(key_hash) WHERE active = TRUE;
 
