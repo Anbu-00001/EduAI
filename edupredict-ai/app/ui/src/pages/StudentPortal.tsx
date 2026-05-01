@@ -1,16 +1,15 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, AlertTriangle, Loader2, ShieldCheck, XCircle, Banknote, Users, BarChart3, TrendingUp, CheckCircle2, ExternalLink } from 'lucide-react'
+import { ChevronLeft, AlertTriangle, Loader2, ShieldCheck, XCircle, Banknote, Users, BarChart3, TrendingUp, CheckCircle2, ExternalLink, Sparkles } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { StudentProfileSchema, type StudentProfile, FIELDS } from '@/api/types'
 import { useStudentSession } from '@/hooks/useStudentSession'
 import { useStudentAssess } from '@/hooks/useStudentAssess'
+import { apiClient } from '@/api/client'
 
-import SkillRoadmap from '@/components/SkillRoadmap'
-import ErrorBoundary from '@/components/ErrorBoundary'
-import TemporalWarningBanner from '@/components/TemporalWarningBanner'
 
 const FIELD_LABELS: Record<string, string> = {
   computer_science: 'Computer Science / IT',
@@ -179,6 +178,30 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
   const peer_pct = Math.round((result.potential_score || 0) * 100);
   const field_demand_pct = Math.round((profile.college_placement_rate || 0) * 100); // proxy if missing from API
   const demand_proxy = profile.college_placement_rate ? profile.college_placement_rate / 100 : 0.5; // proxy
+
+  const { data: skillGap, isLoading: skillGapLoading } = useQuery({
+    queryKey: ['skillGap', profile],
+    queryFn: async () => {
+      const payload = {
+        ...profile,
+        user_hash: sessionStorage.getItem('ep_student_hash') || 'anonymous',
+      }
+      const res = await apiClient.post('/student/skill-gap', payload)
+      return res.data
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  })
+
+  const skillActions = skillGap?.priority_actions?.slice(0, 3).map((a: any) => ({
+    priority_i: a.rank,
+    action: a.action,
+    time_estimate: `~${a.time_months} month${a.time_months !== 1 ? 's' : ''}`,
+    effort_score: a.effort_score,
+    probability_lift: a.probability_lift,
+    resource_url: a.resources?.[0] ? `https://${a.resources[0]}` : undefined,
+    resource_label: a.resources?.[0]?.split('.')[0] || 'Resource',
+  })) ?? null
 
   const tier = result.risk_tier;
   const tierColor = tier === 'GREEN' ? '#22c55e' : tier === 'AMBER' ? '#f59e0b' : '#ef4444';
@@ -419,21 +442,33 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
         transition={{ duration: 0.4, ease: "easeOut", delay: 0.34 }}
         className="w-full relative"
       >
-        <div className="mb-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <TrendingUp size={16} className="text-slate-400" />
-            Skill Roadmap
+        <div className="mb-3 flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+              <TrendingUp size={16} className="text-slate-400" />
+              Personalised Skill Roadmap
+              {skillGapLoading && <Loader2 size={12} className="animate-spin text-slate-500" />}
+              {skillGap && !skillGapLoading && (
+                <span className="text-[10px] font-normal text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Sparkles size={10} /> AI-generated
+                </span>
+              )}
+            </div>
+            <div className="text-slate-400" style={{ fontSize: '11px' }}>
+              {skillGap
+                ? `Estimated time to GREEN tier: ${skillGap.estimated_time_to_green_months} months · Actions ranked by probability lift`
+                : 'Actions ranked by impact on your repayment profile'}
+            </div>
           </div>
-          <div className="text-slate-400" style={{ fontSize: '11px' }}>Actions ranked by impact on your repayment profile</div>
         </div>
-        
+
         <div className="flex flex-nowrap overflow-x-auto gap-4 pb-4 w-full relative" style={{ scrollbarWidth: 'none' }}>
-          {(result.skill_roadmap || [
+          {(skillActions || [
             { priority_i: 1, action: 'Complete domain certification (NPTEL)', time_estimate: '~1 month', effort_score: 3, probability_lift: 0.03, resource_url: 'https://nptel.ac.in', resource_label: 'NPTEL' },
             { priority_i: 2, action: 'Build 2 portfolio projects on GitHub', time_estimate: '~2 months', effort_score: 5, probability_lift: 0.05, resource_url: 'https://kaggle.com', resource_label: 'Kaggle' },
             { priority_i: 3, action: 'Complete 1 more internship', time_estimate: '~3 months', effort_score: 7, probability_lift: 0.08, resource_url: 'https://internshala.com', resource_label: 'Internshala' }
           ]).map((action: any, idx: number) => (
-            <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shrink-0 min-w-[240px] flex flex-col justify-between">
+            <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shrink-0 min-w-[240px] flex flex-col justify-between hover:border-slate-600 transition-colors">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-900" style={{ backgroundColor: tierColor }}>

@@ -1,93 +1,25 @@
 import { AlertTriangle, Download, Loader2 } from 'lucide-react'
-import type { AdverseAction } from '@/api/types'
-import jsPDF from 'jspdf'
+import type { AdverseAction, AssessmentResponse, StudentProfile } from '@/api/types'
 import { useState } from 'react'
+import { generateUnderwritingReport } from '@/components/UnderwritingReportPDF'
 
 interface AdverseActionCardProps {
   adverseAction: AdverseAction
   assessmentId: string
+  result: AssessmentResponse
+  variables: StudentProfile
 }
 
-export default function AdverseActionCard({ adverseAction, assessmentId }: AdverseActionCardProps) {
+export default function AdverseActionCard({ adverseAction, assessmentId, result, variables }: AdverseActionCardProps) {
   const [isGenerating, setIsGenerating] = useState(false)
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     setIsGenerating(true)
-    setTimeout(() => {
-      try {
-        const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-        const pageW = doc.internal.pageSize.getWidth()
-        const margin = 20
-        const contentW = pageW - margin * 2
-        let y = 20
-
-        // Header
-        doc.setFontSize(16)
-        doc.setFont('helvetica', 'bold')
-        doc.text('Adverse Action Notice', margin, y)
-        y += 8
-
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'normal')
-        doc.setTextColor(120)
-        doc.text('EduPredict AI  ·  RBI FREE-AI Framework Compliant', margin, y)
-        y += 6
-        doc.text(`Assessment ID: ${assessmentId}`, margin, y)
-        y += 6
-        doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, margin, y)
-        y += 10
-
-        // Divider
-        doc.setDrawColor(200)
-        doc.line(margin, y, pageW - margin, y)
-        y += 8
-
-        // Reason codes
-        doc.setTextColor(0)
-        doc.setFontSize(11)
-        doc.setFont('helvetica', 'bold')
-        doc.text('Primary Risk Factors', margin, y)
-        y += 7
-
-        adverseAction.reasons.slice(0, 3).forEach((reason) => {
-          doc.setFontSize(10)
-          doc.setFont('helvetica', 'bold')
-          doc.text(reason.code, margin, y)
-          doc.setFont('helvetica', 'normal')
-          const lines = doc.splitTextToSize(reason.reason, contentW - 30)
-          doc.text(lines, margin + 30, y)
-          y += lines.length * 6 + 3
-        })
-
-        y += 4
-        doc.line(margin, y, pageW - margin, y)
-        y += 8
-
-        // Notice text
-        doc.setFontSize(10)
-        doc.setFont('helvetica', 'normal')
-        const noticeLines = doc.splitTextToSize(adverseAction.notice, contentW)
-        doc.text(noticeLines, margin, y)
-        y += noticeLines.length * 6 + 8
-
-        // Dispute rights
-        doc.setFontSize(9)
-        doc.setTextColor(160, 60, 60)
-        doc.text(
-          'You have the right to dispute this assessment. Contact your lender within 60 days.',
-          margin, y
-        )
-        y += 6
-        doc.setTextColor(120)
-        doc.text(`Regulatory Reference: ${adverseAction.rbi_reference}`, margin, y)
-
-        doc.save(`adverse-action-${assessmentId.slice(0, 12)}.pdf`)
-      } catch (err) {
-        console.error("PDF generation failed", err)
-      } finally {
-        setIsGenerating(false)
-      }
-    }, 0)
+    try {
+      await generateUnderwritingReport(result, variables)
+    } finally {
+      setIsGenerating(false)
+    }
   }
 
   if (!adverseAction.adverse_action_required) return null
@@ -127,7 +59,7 @@ export default function AdverseActionCard({ adverseAction, assessmentId }: Adver
             <span className="text-[9px] font-black uppercase text-rose-text bg-rose/20 px-2 py-0.5 rounded-md font-mono shrink-0">
               {reason.code}
             </span>
-            <p className="text-xs text-slate-300">{reason.reason}</p>
+            <p className="text-xs text-slate-300">{reason.reason || reason.code}</p>
           </div>
         ))}
       </div>

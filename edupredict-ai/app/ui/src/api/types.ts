@@ -54,7 +54,7 @@ export interface AssessmentResponse {
 
 export interface AdverseAction {
   adverse_action_required: boolean
-  reasons: Array<{ code: string; reason: string }>
+  reasons: Array<{ code: string; reason?: string; feature?: string; impact?: number }>
   notice:  string
   rbi_reference: string
 }

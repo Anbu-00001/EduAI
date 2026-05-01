@@ -1,67 +1,110 @@
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine,
-  Cell, LabelList, ResponsiveContainer, Tooltip,
-} from 'recharts'
+import { useState } from 'react'
 import { titleCase } from '@/lib/utils'
+import { useQuery } from '@tanstack/react-query'
+import { apiClient } from '@/api/client'
 
 interface ShapWaterfallProps {
   contributions: Record<string, number>
+  actualValues?: Record<string, any>
 }
 
-export default function ShapWaterfall({ contributions }: ShapWaterfallProps) {
+export default function ShapWaterfall({ contributions, actualValues = {} }: ShapWaterfallProps) {
+  const [expandedFeature, setExpandedFeature] = useState<string | null>(null)
+
+  const { data: featureRanges } = useQuery({
+    queryKey: ['featureRanges'],
+    queryFn: async () => {
+      const res = await apiClient.get('/features/ranges')
+      return res.data
+    }
+  })
+
   const sorted = Object.entries(contributions)
-    .map(([name, value]) => ({ name: titleCase(name.replace(/_normalized$/, '')), value }))
+    .map(([name, value]) => ({ name, label: titleCase(name.replace(/_normalized$/, '')), value }))
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-    .slice(0, 10)
+    .slice(0, 5)
 
   return (
     <div>
       <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4">
-        Why This Score? (SHAP Explainability)
+        Top 5 Risk Drivers
       </p>
-      <div
-        className="w-full"
-        aria-label="SHAP feature contribution chart showing the top 10 factors impacting repayment probability"
-        role="img"
-      >
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart
-            data={sorted}
-            layout="vertical"
-            margin={{ top: 4, right: 64, left: 8, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-            <XAxis
-              type="number"
-              tickFormatter={v => `${(v * 100).toFixed(0)}%`}
-              tick={{ fontSize: 10, fill: '#64748b' }}
-              label={{ value: 'SHAP value (impact on repayment probability)', position: 'insideBottom', offset: -4, fontSize: 9, fill: '#475569' }}
-            />
-            <YAxis
-              type="category"
-              dataKey="name"
-              width={130}
-              tick={{ fontSize: 10, fill: '#94a3b8' }}
-            />
-            <Tooltip
-              formatter={(v: number) => [`${(v * 100).toFixed(2)}%`, 'Impact']}
-              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8 }}
-              labelStyle={{ color: '#94a3b8', fontSize: 11 }}
-            />
-            <ReferenceLine x={0} stroke="#475569" strokeWidth={1} />
-            <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive>
-              {sorted.map((entry, i) => (
-                <Cell key={i} fill={entry.value > 0 ? '#10b981' : '#f43f5e'} />
-              ))}
-              <LabelList
-                dataKey="value"
-                position="right"
-                formatter={(v: number) => `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`}
-                style={{ fontSize: 9, fill: '#94a3b8' }}
-              />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+      <div className="space-y-3 w-full">
+        {sorted.map((entry) => {
+          const isPositive = entry.value > 0
+          const absVal = Math.abs(entry.value)
+          const widthPct = Math.min(100, Math.max(2, absVal * 400)) // Scale for visibility
+          const isExpanded = expandedFeature === entry.name
+          const ranges = featureRanges?.[entry.name]
+          const p10 = ranges?.p10 ?? 0
+          const p90 = ranges?.p90 ?? 0
+          const actual = actualValues[entry.name] ?? ranges?.median ?? 0
+          const target = entry.value < 0 ? p90 : p10 // Simplistic target
+          const delta = (Math.abs(entry.value) * 0.8 * 100).toFixed(1)
+
+          return (
+            <div key={entry.name} className="flex flex-col">
+              <div 
+                className="group relative flex items-center h-8 cursor-pointer hover:bg-slate-800/30 rounded px-1 transition-colors"
+                onClick={() => setExpandedFeature(isExpanded ? null : entry.name)}
+              >
+                {/* Left label */}
+                <div className="w-[30%] text-xs text-slate-400 truncate pr-2" title={entry.label}>
+                  {entry.label}
+                </div>
+                
+                {/* Center dividing line and bars */}
+                <div className="w-[50%] relative flex items-center justify-center h-full border-l border-slate-700">
+                  {/* Left side (Positive) */}
+                  <div className="w-1/2 h-full flex items-center justify-end pr-px">
+                    {isPositive && (
+                      <div 
+                        className="h-[22px] rounded-l-sm bg-gradient-to-l from-emerald-500 to-emerald-400/50" 
+                        style={{ width: `${widthPct}%` }}
+                      />
+                    )}
+                  </div>
+                  {/* Right side (Negative) */}
+                  <div className="w-1/2 h-full flex items-center justify-start pl-px">
+                    {!isPositive && (
+                      <div 
+                        className="h-[22px] rounded-r-sm bg-gradient-to-r from-rose-500 to-rose-400/50" 
+                        style={{ width: `${widthPct}%` }}
+                      />
+                    )}
+                  </div>
+                  
+                  {/* Tooltip on hover */}
+                  <div className="absolute hidden group-hover:block z-10 bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-900 border border-slate-700 text-xs text-slate-300 p-2 rounded shadow-xl w-48 text-center pointer-events-none">
+                    <p className="font-bold text-white">{entry.label}</p>
+                    <p>Actual: {typeof actual === 'number' ? actual.toFixed(2) : actual}</p>
+                    <p className="text-[10px] text-slate-500">Pop range: {p10.toFixed(1)} - {p90.toFixed(1)}</p>
+                  </div>
+                </div>
+
+                {/* Right value */}
+                <div className="w-[20%] text-right text-xs font-mono pl-2">
+                  <span className={isPositive ? 'text-emerald-400' : 'text-rose-400'}>
+                    {isPositive ? '+' : ''}{entry.value.toFixed(3)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Sub-panel */}
+              {isExpanded && (
+                <div className="mt-1 mb-2 ml-[30%] p-2.5 bg-slate-800/50 rounded border border-slate-700/50 text-xs text-slate-300">
+                  <p>
+                    <span className="text-white font-medium">{entry.label}</span> = {typeof actual === 'number' ? actual.toFixed(2) : actual} 
+                    <span className="text-slate-500 ml-1">(population p10–p90: {p10.toFixed(1)}–{p90.toFixed(1)})</span>
+                  </p>
+                  <p className="mt-1.5 text-slate-400">
+                    Counterfactual: if this were <span className="text-white">{target.toFixed(2)}</span>, prediction would change by <span className={isPositive ? 'text-rose-400' : 'text-emerald-400'}>±{delta}%</span>
+                  </p>
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
