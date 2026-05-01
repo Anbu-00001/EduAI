@@ -20,16 +20,33 @@ from fastapi import HTTPException, Request
 import redis.asyncio as aioredis
 from config import EnvConfig
 
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
 logger = logging.getLogger(__name__)
 
 _redis_client = None
 
+def _get_tenant_key(request: Request):
+    """
+    Key function for slowapi: uses tenant_id if authenticated, 
+    otherwise falls back to remote IP address.
+    """
+    tenant = getattr(request.state, "tenant", None)
+    if tenant and tenant.get("tenant_id"):
+        return tenant["tenant_id"]
+    return get_remote_address(request)
 
-async def get_redis():
+limiter = Limiter(key_func=_get_tenant_key)
+
+async def create_redis_pool():
     global _redis_client
     if _redis_client is None:
         _redis_client = aioredis.from_url(EnvConfig.REDIS_URL(), decode_responses=True)
     return _redis_client
+
+async def get_redis():
+    return await create_redis_pool()
 
 
 async def check_rate_limit(tenant_id: str, limit_rpm: int, request: Request):

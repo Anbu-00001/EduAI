@@ -106,3 +106,6 @@ evidently
 python-jose[cryptography]
 passlib[bcrypt]
 sentence-transformers
+slowapi
+celery
+aiohttp

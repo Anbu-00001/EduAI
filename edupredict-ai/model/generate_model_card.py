@@ -30,6 +30,10 @@ def generate_model_card() -> dict:
     feature_ranges = json.loads((base / "feature_ranges.json").read_text())
     cal_params = json.loads((base / "calibration_params.json").read_text())
     graph_params = json.loads((base / "graph_params.json").read_text())
+    
+    group_thresholds = {}
+    if (base / "group_thresholds.json").exists():
+        group_thresholds = json.loads((base / "group_thresholds.json").read_text())
 
     card = {
         "model_details": {
@@ -91,6 +95,13 @@ def generate_model_card() -> dict:
                 "predictive parity cannot both hold when base rates differ. "
                 "We report both and let the operator choose based on policy."
             ),
+        },
+        "fairness_calibration": {
+            "threshold_disadvantaged": group_thresholds.get("threshold_disadvantaged"),
+            "threshold_advantaged": group_thresholds.get("threshold_advantaged"),
+            "validation_fpr_diff": group_thresholds.get("validation_fpr_diff"),
+            "validation_tpr_diff": group_thresholds.get("validation_tpr_diff"),
+            "computed_at": group_thresholds.get("computed_at")
         },
         "architecture": {
             "base_learners": ["XGBoost (Dart)", "LightGBM (Dart)", "CatBoost (Ordered)"],
@@ -181,6 +192,14 @@ def _card_to_markdown(card: dict) -> str:
 - **RBI FREE-AI Framework (August 2025)**: Explainability via SHAP, Fairness via DPI ≥ 0.80
 - **DPDP Act 2023**: Per-source consent capture, 72h deletion on withdrawal
 - **Adverse Action**: Reason codes generated for all RED-tier decisions
+
+## Fairness Calibration (Post-processing)
+| Group | Threshold |
+|-------|-----------|
+| Disadvantaged | {card['fairness_calibration']['threshold_disadvantaged']} |
+| Advantaged | {card['fairness_calibration']['threshold_advantaged']} |
+
+*Validation after calibration: FPR diff = {card['fairness_calibration']['validation_fpr_diff']:.4f}, TPR diff = {card['fairness_calibration']['validation_tpr_diff']:.4f}*
 
 ## Known Limitations
 - Repayment labels are synthetic (calibrated to RBI 4.4% NPA)

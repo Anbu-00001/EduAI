@@ -30,6 +30,7 @@ PROCESSED_DIR     = DATA_DIR / "processed"
 PIPELINE_DIR      = DATA_DIR / "pipeline"
 HISTORY_DIR       = PIPELINE_DIR / "history"
 ARTIFACTS_DIR     = ROOT_DIR / "model" / "artifacts"
+PROD_ARTIFACTS_DIR = ROOT_DIR / "model" / "artifacts"
 MONITORING_DB     = DATA_DIR / "monitoring.db"
 MLFLOW_DB         = ROOT_DIR / "mlflow.db"
 
@@ -63,6 +64,10 @@ class EnvConfig:
         if val == default:
             logger.debug(f"Using default for {key}={default!r} ({description})")
         return val
+
+    PROJECT_ROOT = lambda: ROOT_DIR
+    DATA_DIR = lambda: DATA_DIR
+    PROD_ARTIFACTS_DIR = lambda: PROD_ARTIFACTS_DIR
 
     # Required
     JWT_SECRET = lambda: EnvConfig.require(
@@ -154,6 +159,30 @@ class EnvConfig:
     GRAFANA_URL = lambda: EnvConfig.optional(
         "GRAFANA_URL", "http://localhost:3000",
         "Grafana instance URL. Linked from admin panel (not embedded)."
+    )
+
+    # Fairness (Task 1)
+    FAIRNESS_FPR_TOLERANCE = lambda: float(EnvConfig.optional(
+        "FAIRNESS_FPR_TOLERANCE", "0.10",
+        "Maximum allowed difference in False Positive Rate between groups"
+    ))
+    FAIRNESS_TPR_TOLERANCE = lambda: float(EnvConfig.optional(
+        "FAIRNESS_TPR_TOLERANCE", "0.10",
+        "Maximum allowed difference in True Positive Rate between groups"
+    ))
+    CGPA_DISADVANTAGED_THRESHOLD = lambda: float(EnvConfig.optional(
+        "CGPA_DISADVANTAGED_THRESHOLD", "0.72",
+        "CGPA threshold (normalized 0-1) to identify disadvantaged students"
+    ))
+
+    # Celery (Task 6)
+    CELERY_BROKER_URL = lambda: EnvConfig.optional(
+        "CELERY_BROKER_URL", "redis://localhost:6379/1",
+        "Celery broker connection string"
+    )
+    CELERY_RESULT_BACKEND = lambda: EnvConfig.optional(
+        "CELERY_RESULT_BACKEND", "redis://localhost:6379/2",
+        "Celery result backend connection string"
     )
 
 

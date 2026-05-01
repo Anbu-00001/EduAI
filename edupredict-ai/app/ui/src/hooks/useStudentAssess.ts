@@ -8,6 +8,7 @@ export function useStudentAssess() {
       // The student_jwt is injected by client.ts
       const payload = {
         ...profile,
+        user_hash: sessionStorage.getItem('ep_student_hash') || 'anonymous',
         consent: {
           data_sources: ['Academic Records', 'Self-Reported Profile'],
           notice_version: '1.0',

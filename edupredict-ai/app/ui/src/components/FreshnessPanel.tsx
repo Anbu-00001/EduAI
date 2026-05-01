@@ -88,6 +88,30 @@ export default function FreshnessPanel() {
               </div>
             )
           })}
+
+          {/* Circuit Breakers Section */}
+          <div className="pt-3 mt-3 border-t border-border">
+            <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest mb-2">Circuit States (External APIs)</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(data.circuit_states || {}).map(([name, state]) => (
+                <div key={name} className="flex items-center gap-2 px-2 py-1 bg-card-2 rounded-lg border border-border">
+                  <span className="text-[10px] font-mono text-slate-400">{name}:</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      state === 'closed' ? 'bg-green' : 
+                      state === 'open' ? 'bg-rose animate-pulse' : 
+                      'bg-amber animate-bounce'
+                    }`} />
+                    <span className={`text-[9px] font-bold uppercase ${
+                      state === 'closed' ? 'text-green-text' : 
+                      state === 'open' ? 'text-rose-text' : 
+                      'text-amber-text'
+                    }`}>{state}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

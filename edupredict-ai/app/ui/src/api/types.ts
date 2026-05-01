@@ -25,7 +25,7 @@ export const StudentProfileSchema = z.object({
   }),
   cgpa_verified:            z.boolean().default(false),
   institution_verified:     z.boolean().default(false),
-  consent:                  ConsentBlockSchema,
+  consent:                  ConsentBlockSchema.optional(),
 })
 
 export type StudentProfile = z.infer<typeof StudentProfileSchema>
@@ -45,6 +45,8 @@ export interface AssessmentResponse {
   shap_contributions:         Record<string, number>
   counterfactual:             Record<string, any> | null
   adverse_action:             AdverseAction | null
+  fairness_applied:           boolean
+  temporal_features_estimated: boolean
   fairness_note:              string
   model_version:              string
   timestamp:                  string
@@ -65,7 +67,8 @@ export interface FreshnessSource {
 }
 
 export interface FreshnessResponse {
-  sources:     FreshnessSource[]
-  cache_age_h: number
-  status:      'fresh' | 'stale' | 'critical'
+  sources:        FreshnessSource[]
+  cache_age_h:    number
+  status:         'fresh' | 'stale' | 'critical'
+  circuit_states: Record<string, 'closed' | 'open' | 'half_open'>
 }

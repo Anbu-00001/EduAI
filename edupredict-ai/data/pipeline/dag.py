@@ -26,6 +26,17 @@ ENDPOINTS = {
     "datagov": "https://api.data.gov.in/resource/8d052a6a-d6e6-427c-9b59-1a052e46d29d" # PLFS sample
 }
 
+from config import PIPELINE_DIR
+from data.pipeline.circuit_breaker import CircuitBreaker
+
+_CIRCUIT_DIR = PIPELINE_DIR / "circuits"
+
+_circuits: dict[str, CircuitBreaker] = {
+    "naukri":   CircuitBreaker.load("naukri",   _CIRCUIT_DIR / "naukri.json",   failure_threshold=3, cooldown_seconds=1800),
+    "linkedin": CircuitBreaker.load("linkedin", _CIRCUIT_DIR / "linkedin.json", failure_threshold=3, cooldown_seconds=1800),
+    "datagov":  CircuitBreaker.load("datagov",  _CIRCUIT_DIR / "datagov.json",  failure_threshold=3, cooldown_seconds=1800),
+}
+
 def freshness_weight(retrieved_at_unix: float, decay_lambda: float) -> float:
     delta_hours = max(0.0, (time.time() - retrieved_at_unix) / 3600.0)
     # max(0) prevents exp(+inf) from clock skew or future-dated cache
@@ -37,6 +48,10 @@ def reliability_score(stats: Dict, source: str) -> float:
     return (s + 1.0) / (s + f + 2.0)
 
 async def fetch_naukri(session: aiohttp.ClientSession, field: str) -> Optional[int]:
+    cb = _circuits["naukri"]
+    if not cb.allow_request():
+        logger.info(f"Circuit [naukri] OPEN — skipping {field}")
+        return None
     query = FIELD_QUERIES[field]
     params = {"keyword": query, "location": "India", "experience": 0, "noOfResults": 1}
     headers = {"appid": "109", "systemid": "109", "User-Agent": "Mozilla/5.0"}
@@ -44,12 +59,20 @@ async def fetch_naukri(session: aiohttp.ClientSession, field: str) -> Optional[i
         async with session.get(ENDPOINTS["naukri"], params=params, headers=headers, timeout=10) as r:
             if r.status == 200:
                 data = await r.json()
-                return data.get("noOfJobs") or data.get("totalCount") or 0
+                result = data.get("noOfJobs") or data.get("totalCount") or 0
+                cb.record_success()
+                return result
+        cb.record_failure()
     except Exception as e:
-        logger.warning(f"Failed to fetch naukri for {field}: {e}")
+        cb.record_failure()
+        logger.warning(f"Circuit [naukri] failure for {field}: {e}")
     return None
 
 async def fetch_linkedin(session: aiohttp.ClientSession, field: str) -> Optional[int]:
+    cb = _circuits["linkedin"]
+    if not cb.allow_request():
+        logger.info(f"Circuit [linkedin] OPEN — skipping {field}")
+        return None
     query = FIELD_QUERIES[field]
     params = {"keywords": query, "location": "India", "start": 0, "count": 1}
     try:
@@ -58,9 +81,14 @@ async def fetch_linkedin(session: aiohttp.ClientSession, field: str) -> Optional
                 text = await r.text()
                 import re
                 match = re.search(r'"totalResultCount":(\d+)', text)
-                return int(match.group(1)) if match else None
+                result = int(match.group(1)) if match else None
+                if result is not None:
+                    cb.record_success()
+                    return result
+        cb.record_failure()
     except Exception as e:
-        logger.warning(f"Failed to fetch linkedin for {field}: {e}")
+        cb.record_failure()
+        logger.warning(f"Circuit [linkedin] failure for {field}: {e}")
     return None
 
 async def fetch_indeed(session: aiohttp.ClientSession, field: str) -> Optional[int]:
@@ -68,6 +96,10 @@ async def fetch_indeed(session: aiohttp.ClientSession, field: str) -> Optional[i
     return None
 
 async def fetch_datagov(session: aiohttp.ClientSession, field: str) -> Optional[int]:
+    cb = _circuits["datagov"]
+    if not cb.allow_request():
+        logger.info(f"Circuit [datagov] OPEN — skipping {field}")
+        return None
     api_key = EnvConfig.DATAGOV_API_KEY()
     if not api_key: 
         logger.warning("DATAGOV_API_KEY not set. Skipping fetch_datagov.")
@@ -77,9 +109,13 @@ async def fetch_datagov(session: aiohttp.ClientSession, field: str) -> Optional[
         async with session.get(ENDPOINTS["datagov"], params=params, timeout=10) as r:
             if r.status == 200:
                 data = await r.json()
-                return data.get("total", 100000)
+                result = data.get("total", 100000)
+                cb.record_success()
+                return result
+        cb.record_failure()
     except Exception as e:
-        logger.warning(f"Failed to fetch datagov for {field}: {e}")
+        cb.record_failure()
+        logger.warning(f"Circuit [datagov] failure for {field}: {e}")
     return None
 
 async def run_dag():

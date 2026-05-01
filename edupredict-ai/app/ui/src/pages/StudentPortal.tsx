@@ -11,6 +11,7 @@ import RiskGauge from '@/components/RiskGauge'
 import ConformalInterval from '@/components/ConformalInterval'
 import SkillRoadmap from '@/components/SkillRoadmap'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import TemporalWarningBanner from '@/components/TemporalWarningBanner'
 
 const FIELD_LABELS: Record<string, string> = {
   computer_science: 'Computer Science / IT',
@@ -94,6 +95,7 @@ export default function StudentPortal() {
                 </div>
               )}
 
+
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 bg-card border border-border p-6 rounded-3xl">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -173,6 +175,11 @@ export default function StudentPortal() {
                   Reassess
                 </button>
               </div>
+
+              <TemporalWarningBanner 
+                isEstimated={result.temporal_features_estimated} 
+                fairnessApplied={result.fairness_applied} 
+              />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-card border border-border rounded-3xl p-6 flex flex-col gap-4">

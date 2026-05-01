@@ -1,14 +1,23 @@
 import subprocess, sys, json, time, os, requests, argparse
+from pathlib import Path
+
+# Path Hygiene: No hardcoded project names
+ROOT_DIR = Path(__file__).parent
+sys.path.insert(0, str(ROOT_DIR))
+
+from config import PIPELINE_DIR, ARTIFACTS_DIR, PROCESSED_DIR
+
+assert ROOT_DIR.exists(), f"ROOT_DIR missing: {ROOT_DIR}"
+assert (ROOT_DIR / "config.py").exists(), "run_pipeline.py must live alongside config.py"
 
 def run_cmd(cmd):
     print(f"\n> Running: {cmd}")
     env = os.environ.copy()
-    # We run from project root, but ensure PYTHONPATH includes edupredict-ai
-    project_root = os.path.join(os.getcwd(), "edupredict-ai")
-    env["PYTHONPATH"] = f"{project_root}:{os.environ.get('PYTHONPATH', '')}"
+    # We run from project root, but ensure PYTHONPATH includes ROOT_DIR
+    env["PYTHONPATH"] = f"{ROOT_DIR}:{os.environ.get('PYTHONPATH', '')}"
     
-    # Change CWD for the subprocess to edupredict-ai so internal relative paths work
-    res = subprocess.run(cmd, shell=True, env=env, cwd=project_root)
+    # Change CWD for the subprocess to ROOT_DIR so internal relative paths work
+    res = subprocess.run(cmd, shell=True, env=env, cwd=str(ROOT_DIR))
     if res.returncode != 0:
         print(f"FAILED: {cmd}")
         sys.exit(1)
@@ -32,8 +41,8 @@ def main():
     # Step 1: DAG (Data Acquisition)
     run_cmd("python3 data/pipeline/dag.py")
     
-    # Check cache (path is relative to edupredict-ai now)
-    cache_path = os.path.join("edupredict-ai", "data/pipeline/demand_cache.json")
+    # Check cache
+    cache_path = PIPELINE_DIR / "demand_cache.json"
     with open(cache_path) as f:
         cache = json.load(f)
         assert len(cache["records"]) >= 1, "demand_cache.json records empty"
@@ -46,7 +55,7 @@ def main():
 
         # Step 3: Feature Engineering (Phase 5: Indian Datasets)
         run_cmd("python3 model/feature_engineering.py")
-        features_path = os.path.join("edupredict-ai", "data/processed/features.csv")
+        features_path = PROCESSED_DIR / "features.csv"
         import pandas as pd
         df = pd.read_csv(features_path)
         assert df.shape[1] >= 14, f"Features CSV too narrow for Phase 5: {df.shape[1]} cols (expected 14+)"
@@ -54,7 +63,7 @@ def main():
 
         # Step 4: Retrain with Temporal & Integrity
         run_cmd("python3 model/retrain_with_temporal.py")
-        metrics_path = os.path.join("edupredict-ai", "model/artifacts/metrics.json")
+        metrics_path = ARTIFACTS_DIR / "metrics.json"
         with open(metrics_path) as f:
             metrics = json.load(f)
             assert metrics["graph_regularised_auc"] >= 0.70, f"AUC too low for production: {metrics['graph_regularised_auc']}"
@@ -62,7 +71,7 @@ def main():
 
     # Step 5: Docker Restart (or manual if docker not available)
     print("\n> Attempting to restart API container...")
-    # docker-compose.yml is likely in the workspace root, not edupredict-ai/
+    # docker-compose.yml is likely in the workspace root
     subprocess.run("docker compose restart api || true", shell=True)
     
     print("\nWaiting for API to stabilize...")

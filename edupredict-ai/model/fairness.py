@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,21 @@ class FairnessReport:
             f"({'PASS' if abs(self.predictive_parity_diff) <= 0.10 else 'FAIL'})\n"
             f"Overall Fair:              {'YES' if self.overall_fair else 'NO'}"
         )
+
+def is_disadvantaged(cgpa_norm: float, annual_income: Optional[float] = None, institution_verified: bool = True) -> int:
+    """
+    Compute the protected attribute (disadvantaged flag).
+    Uses cgpa, annual family income, and institution verification status.
+    Returns 1 (disadvantaged) or 0 (advantaged).
+    """
+    from config import EnvConfig
+    median_threshold = EnvConfig.CGPA_DISADVANTAGED_THRESHOLD()
+    
+    below_median = cgpa_norm < median_threshold
+    low_income = annual_income is not None and annual_income < 300_000
+    unverified = not institution_verified
+    
+    return int(below_median and (low_income or unverified))
 
 def compute_fairness_metrics(
         y_true: np.ndarray,

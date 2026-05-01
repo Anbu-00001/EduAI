@@ -4,6 +4,7 @@ import math
 import numpy as np
 import pandas as pd
 import logging
+from typing import Any
 from sklearn.metrics import log_loss
 from config import EnvConfig, FIELD_QUERIES
 from prometheus_client import Counter
@@ -15,7 +16,7 @@ MACRO_FALLBACK_COUNTER = Counter(
 
 logger = logging.getLogger(__name__)
 
-def compute_macro_index(datagov_api_key: str = None) -> float:
+def compute_macro_index(datagov_api_key: str = None, breaker: Any = None) -> float:
     """
     Upstart's Macro Index (UMI) accounts for economic conditions
     that affect repayment independently of individual student profile.
@@ -51,10 +52,21 @@ def compute_macro_index(datagov_api_key: str = None) -> float:
         api_key = datagov_api_key or EnvConfig.DATAGOV_API_KEY()
         if api_key:
             url = "https://api.data.gov.in/resource/7d9b5b2e-5671-4e0b-a2e1-c8d3ad8f2e1b"
-            resp = requests.get(
-                url, params={"api-key": api_key, "format": "json", "limit": 1},
-                timeout=10
-            )
+            
+            if breaker:
+                resp = breaker.call(
+                    requests.get, 
+                    url, 
+                    params={"api-key": api_key, "format": "json", "limit": 1},
+                    timeout=5
+                )
+            else:
+                resp = requests.get(
+                    url, 
+                    params={"api-key": api_key, "format": "json", "limit": 1},
+                    timeout=5
+                )
+
             if resp.status_code == 200:
                 data = resp.json()
                 records = data.get("records", [])
@@ -130,7 +142,7 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
                 "demand_velocity_per_day": 0.0,
                 "demand_acceleration": 0.0,
                 "velocity_r_squared": 0.0,
-                "velocity_estimated": True
+                "estimated": True
             })
         return pd.DataFrame(records)
 
@@ -155,7 +167,7 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
                 "demand_velocity_per_day": 0.0,
                 "demand_acceleration": 0.0,
                 "velocity_r_squared": 0.0,
-                "velocity_estimated": True
+                "estimated": True
             })
         return pd.DataFrame(records)
 
@@ -170,7 +182,7 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
                 "demand_velocity_per_day": 0.0,
                 "demand_acceleration": 0.0,
                 "velocity_r_squared": 0.0,
-                "velocity_estimated": True
+                "estimated": True
             })
             continue
 
@@ -209,7 +221,7 @@ def compute_demand_velocity(cache_dir="data/pipeline/history"):
             "demand_velocity_per_day": beta,
             "demand_acceleration": accel,
             "velocity_r_squared": float(r2),
-            "velocity_estimated": False
+            "estimated": False
         })
         
     return pd.DataFrame(results)

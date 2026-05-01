@@ -35,30 +35,24 @@ _retrain_in_progress = False
 
 
 def run_dag_job():
-    """Job: refresh demand data from all sources."""
+    """Job: dispatch data acquisition DAG to Celery."""
     try:
-        logger.info("Scheduler: starting DAG run")
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from data.pipeline.dag import run_dag
-        from data.pipeline.save_snapshot import save_snapshot
-        asyncio.run(run_dag())
-        save_snapshot()
-        logger.info("Scheduler: DAG run complete")
+        from app.api.tasks import run_acquisition_pipeline
+        run_acquisition_pipeline.delay()
+        logger.info("Scheduler: Dispatched DAG run to Celery")
     except Exception as e:
-        logger.error(f"Scheduler: DAG run failed: {e}", exc_info=True)
+        logger.error(f"Scheduler: Failed to dispatch DAG run: {e}")
 
 
 def run_drift_check_job():
-    """Job: check feature drift from last 200 API predictions."""
-    global _retrain_in_progress
+    """Job: check feature drift and dispatch retraining if needed."""
     try:
         import sqlite3
         import numpy as np
         import pandas as pd
         from model.monitoring import check_drift
 
-        # Load recent API call feature vectors from audit log
-        monitoring_db = Path("data/monitoring.db")
+        monitoring_db = EnvConfig.DATA_DIR() / "monitoring.db"
         if not monitoring_db.exists():
             logger.info("No monitoring DB yet — skipping drift check")
             return
@@ -83,49 +77,28 @@ def run_drift_check_job():
         predictions = np.array([r[1] for r in rows])
         df = pd.DataFrame(feature_rows)
 
-        metrics_path = Path("model/artifacts/metrics.json")
+        metrics_path = EnvConfig.PROD_ARTIFACTS_DIR() / "metrics.json"
         if not metrics_path.exists():
             logger.warning("metrics.json not found — skipping drift check")
             return
             
         feature_names = json.loads(metrics_path.read_text()).get("feature_cols_v3", [])
-
         report = check_drift(df, predictions, feature_names)
 
-        if report["retrain_recommended"] and not _retrain_in_progress:
-            logger.warning(
-                f"Drift detected! Scheduling retraining. "
-                f"Reasons: {report['retrain_reasons']}"
-            )
-            threading.Thread(target=run_retraining_job, daemon=True).start()
+        if report["retrain_recommended"]:
+            logger.warning(f"Drift detected! Dispatching retraining task. Reasons: {report['retrain_reasons']}")
+            from app.api.tasks import run_retraining_pipeline
+            run_retraining_pipeline.delay()
 
     except Exception as e:
         logger.error(f"Drift check failed: {e}", exc_info=True)
 
 
 def run_retraining_job():
-    """Job: full retrain pipeline. Only one runs at a time."""
-    global _retrain_in_progress
-    if not _retrain_lock.acquire(blocking=False):
-        logger.info("Retraining already in progress — skipping duplicate trigger")
-        return
-    _retrain_in_progress = True
-    try:
-        logger.info("Auto-retraining triggered by drift detection")
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, "model/retrain_with_temporal.py"],
-            capture_output=True, text=True, timeout=1800  # 30 min max
-        )
-        if result.returncode == 0:
-            logger.info("Auto-retrain complete")
-        else:
-            logger.error(f"Auto-retrain failed:\n{result.stderr}")
-    except Exception as e:
-        logger.error(f"Retraining job error: {e}", exc_info=True)
-    finally:
-        _retrain_in_progress = False
-        _retrain_lock.release()
+    """Manual trigger for retraining via Celery."""
+    from app.api.tasks import run_retraining_pipeline
+    run_retraining_pipeline.delay()
+    logger.info("Scheduler: Manually dispatched retraining task to Celery")
 
 
 def create_scheduler() -> BackgroundScheduler:

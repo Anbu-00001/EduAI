@@ -34,6 +34,7 @@ from model.feature_pipeline import FeaturePipeline, TemporalFeatures, MarketFeat
 from app.api.consent import check_consent, get_consent_notice
 from model.temporal_features import build_peer_cohort_graph, compute_macro_index
 from model.scheduler import create_scheduler
+from app.api.circuit_breaker import CircuitBreaker
 
 from config import EnvConfig
 
@@ -96,25 +97,42 @@ async def lifespan(app: FastAPI):
         # Removing hardcoded key seeding for Phase 5 security
         pass
     
-    base_path = "model/artifacts/"
+    base_path = EnvConfig.PROD_ARTIFACTS_DIR()
     try:
-        hashes = json.load(open(base_path + "artifact_hashes.json"))
-        app.state.meta_model = safe_load_artifact(base_path + "meta_model.pkl", hashes)
-        app.state.base_models = safe_load_artifact(base_path + "base_models.pkl", hashes)
-        app.state.scaler = safe_load_artifact(base_path + "scaler.pkl", hashes)
-        app.state.calibration = json.load(open(base_path + "calibration_params.json"))
-        app.state.conformal_qhat = json.load(open(base_path + "conformal_params.json"))["q_hat"]
-        app.state.feature_ranges = json.load(open(base_path + "feature_ranges.json"))
-        metrics = json.load(open(base_path + "metrics.json"))
+        hashes = json.load(open(base_path / "artifact_hashes.json"))
+        app.state.meta_model = safe_load_artifact(base_path / "meta_model.pkl", hashes)
+        app.state.base_models = safe_load_artifact(base_path / "base_models.pkl", hashes)
+        app.state.scaler = safe_load_artifact(base_path / "scaler.pkl", hashes)
+        app.state.calibration = json.load(open(base_path / "calibration_params.json"))
+        app.state.conformal_qhat = json.load(open(base_path / "conformal_params.json"))["q_hat"]
+        app.state.feature_ranges = json.load(open(base_path / "feature_ranges.json"))
+        metrics = json.load(open(base_path / "metrics.json"))
         app.state.metrics = metrics
-        app.state.graph_params = json.load(open(base_path + "graph_params.json"))
-        app.state.X_train = np.load(base_path + "X_train_sc.npy")
-        app.state.y_train = np.load(base_path + "y_train.npy")
+        app.state.graph_params = json.load(open(base_path / "graph_params.json"))
+        app.state.X_train = np.load(base_path / "X_train_sc.npy")
+        app.state.y_train = np.load(base_path / "y_train.npy")
         
         # Set gauges
         ECE_GAUGE.set(metrics.get("post_calibration_ece", 0))
         AUC_GAUGE.set(metrics.get("graph_regularised_auc", 0))
         
+        # Load Group Thresholds for Fairness
+        from model.fairness_calibration import load_group_thresholds
+        try:
+            app.state.group_thresholds = load_group_thresholds(Path(base_path))
+            logger.info("✅ Fairness Calibration: Group thresholds loaded.")
+        except FileNotFoundError:
+            logger.warning(
+                "group_thresholds.json not found. Fairness calibration has not been run. "
+                "Using global threshold 0.5 — FPR fairness constraints may not be satisfied."
+            )
+            app.state.group_thresholds = None
+
+        # Initialize Circuit Breakers
+        app.state.breakers = {
+            "datagov": CircuitBreaker("datagov", failure_threshold=3, recovery_timeout=60)
+        }
+
         logger.info("✅ EduPredict AI v5.0: Production artifacts and Monitoring active.")
     except Exception as e:
         logger.error(f"❌ Startup Error: {e}")
@@ -129,6 +147,9 @@ async def lifespan(app: FastAPI):
     await app.state.db_pool.close()
     await app.state.redis.aclose()
 
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+
 app = FastAPI(
     title="EduPredict AI API",
     description="Production-Grade Student Loan Risk Engine",
@@ -137,7 +158,20 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "detail": str(exc.detail),
+            "retry_after_seconds": 60,
+        },
+        headers={"Retry-After": "60"},
+    )
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 Instrumentator().instrument(app).expose(app)
 
@@ -191,7 +225,7 @@ async def get_live_metrics(request: Request, tenant: dict = Depends(get_current_
     # Load static model metrics as fallback when Prometheus is unavailable
     static_metrics = {}
     try:
-        static_metrics = json.loads(Path("model/artifacts/metrics.json").read_text())
+        static_metrics = json.loads((EnvConfig.PROD_ARTIFACTS_DIR() / "metrics.json").read_text())
     except Exception:
         pass
     
@@ -208,28 +242,47 @@ async def get_live_metrics(request: Request, tenant: dict = Depends(get_current_
         "prometheus_url": prom_url,
     }
 
+from app.api.tasks import retrain_model, RETRAIN_LOCK_KEY
+import redis.asyncio as aioredis
+
 @app.post("/v1/admin/retrain")
-async def trigger_retrain(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    tenant: dict = Depends(get_current_tenant)
-):
+async def trigger_retrain(request: Request, tenant: dict = Depends(get_current_tenant)):
     """Trigger a background model retrain. Admin-only."""
     if tenant.get("tenant_id") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    
-    import subprocess
-    def _retrain():
-        subprocess.Popen(
-            ["python3", "run_pipeline.py", "--retrain"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    
-    background_tasks.add_task(_retrain)
-    return {"status": "retrain_scheduled", "message": "Retraining started in background. Check logs for progress."}
+
+    r = aioredis.from_url(EnvConfig.REDIS_URL())
+    existing = await r.get(RETRAIN_LOCK_KEY)
+    await r.aclose()
+
+    if existing:
+        return JSONResponse(status_code=409, content={
+            "status": "already_running",
+            "run_id": existing.decode(),
+            "message": "Poll /v1/admin/retrain/status for progress.",
+        })
+
+    task = retrain_model.delay()
+    return {"status": "scheduled", "task_id": task.id,
+            "message": "Poll /v1/admin/retrain/status for progress."}
 
 
+
+
+def _read_circuit_states() -> dict[str, str]:
+    from config import PIPELINE_DIR
+    circuit_dir = PIPELINE_DIR / "circuits"
+    states = {}
+    for source in ("naukri", "linkedin", "datagov"):
+        path = circuit_dir / f"{source}.json"
+        try:
+            data = json.loads(path.read_text())
+            states[source] = data.get("state", "closed")
+        except FileNotFoundError:
+            states[source] = "closed"  # No file = never tripped = closed
+        except Exception:
+            states[source] = "unknown"
+    return states
 
 
 @app.get("/v1/data/freshness")
@@ -238,7 +291,7 @@ async def data_freshness(request: Request, tenant: dict = Depends(get_current_te
     Returns data source freshness status for the FreshnessPanel component.
     Reads from the demand_cache.json written by the data acquisition scheduler.
     """
-    cache_path = Path("data/pipeline/demand_cache.json")
+    cache_path = EnvConfig.DATA_DIR() / "pipeline" / "demand_cache.json"
     if not cache_path.exists():
         return {
             "sources": [
@@ -274,10 +327,20 @@ async def data_freshness(request: Request, tenant: dict = Depends(get_current_te
              "reliability_score": 0.72,
              "last_fetched_unix": int(generated_at_ts)},
         ]
-        return {"sources": sources, "cache_age_h": round(cache_age_h, 2), "status": status}
+        return {
+            "sources": sources, 
+            "cache_age_h": round(cache_age_h, 2), 
+            "status": status,
+            "circuit_states": _read_circuit_states()
+        }
     except Exception as e:
         logger.warning(f"data_freshness: {e}")
-        return {"sources": [], "cache_age_h": 999.0, "status": "critical"}
+        return {
+            "sources": [], 
+            "cache_age_h": 999.0, 
+            "status": "critical",
+            "circuit_states": _read_circuit_states()
+        }
 
 
 @app.post("/v1/data/refresh")
@@ -306,7 +369,7 @@ class StudentSessionRequest(BaseModel):
 
 @app.post("/v1/auth/student-session")
 @limiter.limit("10/minute")
-async def create_student_session(req: StudentSessionRequest, request: Request):
+async def create_student_session(request: Request, req: StudentSessionRequest):
     from app.api.auth import create_student_jwt_token
     token, expires_in = create_student_jwt_token(req.user_hash)
     return {
@@ -416,6 +479,8 @@ class AssessmentResponse(BaseModel):
     shap_contributions: Dict[str, float]
     counterfactual: Optional[Dict]
     adverse_action: Optional[Dict]
+    fairness_applied: bool
+    temporal_features_estimated: bool
     fairness_note: str
     model_version: str
     timestamp: str
@@ -447,8 +512,8 @@ def _get_tenant_rate_limit(request: Request) -> int:
     return int(EnvConfig.optional("RATE_LIMIT_DEFAULT_RPM", "100", "default rpm"))
 
 @app.post("/v1/assess", response_model=AssessmentResponse)
-@limiter.limit(lambda request: f"{_get_tenant_rate_limit(request)}/minute")
-async def assess_student(profile: AssessRequest, background_tasks: BackgroundTasks, request: Request, tenant: dict = Depends(get_current_tenant)):
+@limiter.limit("100/minute")
+async def assess_student(request: Request, profile: AssessRequest, background_tasks: BackgroundTasks, tenant: dict = Depends(get_current_tenant)):
     # 0. Consent Check (Rate limit handled by decorator)
     if not profile.has_consent:
         raise HTTPException(status_code=422, detail="Explicit consent is required")
@@ -456,16 +521,16 @@ async def assess_student(profile: AssessRequest, background_tasks: BackgroundTas
     # 1. Context Loading
     demand_lookup, velocity_lookup, market_hhi = {}, {}, 0.14
     try:
-        cache = json.load(open("data/pipeline/demand_cache.json"))
+        cache = json.load(open(EnvConfig.DATA_DIR() / "pipeline" / "demand_cache.json"))
         demand_lookup = {r["field"]: r["job_count_normalized"] for r in cache["records"]}
         from model.temporal_features import compute_demand_velocity, compute_hhi
         vel_df = compute_demand_velocity()
-        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
+        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"], "estimated": r["estimated"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
     except Exception as e:
         logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index()
+    macro_index = compute_macro_index(breaker=request.app.state.breakers["datagov"])
     
     feature_names = app.state.metrics.get("feature_cols_v3", [
         "cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized",
@@ -473,10 +538,12 @@ async def assess_student(profile: AssessRequest, background_tasks: BackgroundTas
         "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index", "backlogs_missing"
     ])
     
+    temporal_data = velocity_lookup.get(profile.field_of_study, {})
     temporal = TemporalFeatures(
-        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
-        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
-        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+        velocity=temporal_data.get("velocity", 0.0),
+        accel=temporal_data.get("accel", 0.0),
+        r2=temporal_data.get("r2", 0.0),
+        estimated=temporal_data.get("estimated", True)
     )
     market = MarketFeatures(
         demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),
@@ -520,7 +587,40 @@ async def assess_student(profile: AssessRequest, background_tasks: BackgroundTas
     q_hat = app.state.conformal_qhat
     ci = {"lower": round(max(0, cal_prob - q_hat), 4), "upper": round(min(1, cal_prob + q_hat), 4)}
     
-    risk_tier = "GREEN" if cal_prob >= 0.72 else "AMBER" if cal_prob >= 0.50 else "RED"
+    # 3.1 Fairness Threshold Application
+    def _is_disadvantaged(profile: AssessRequest) -> int:
+        """
+        Compute the protected attribute at inference time.
+        Returns 1 (disadvantaged) or 0 (advantaged).
+        """
+        cgpa_norm = profile.cgpa / 10.0
+        # Use EnvConfig.CGPA_DISADVANTAGED_THRESHOLD()
+        below_cgpa_median = cgpa_norm < EnvConfig.CGPA_DISADVANTAGED_THRESHOLD()
+        low_income = (
+            profile.annual_family_income_inr is not None
+            and profile.annual_family_income_inr < 300_000
+        )
+        unverified = not profile.institution_verified
+        return int(below_cgpa_median and (low_income or unverified))
+
+    sensitive = _is_disadvantaged(profile)
+    thresholds = request.app.state.group_thresholds
+    fairness_applied = thresholds is not None
+
+    if thresholds is not None:
+        threshold = (
+            thresholds["threshold_disadvantaged"] if sensitive == 1
+            else thresholds["threshold_advantaged"]
+        )
+    else:
+        threshold = 0.5
+
+    def _prob_to_risk_tier(prob: float, threshold: float) -> str:
+        if prob >= threshold + 0.15: return "GREEN"
+        if prob >= threshold - 0.05: return "AMBER"
+        return "RED"
+
+    risk_tier = _prob_to_risk_tier(cal_prob, threshold)
     
     # 4. SHAP & Adverse Action
     explainer = shap.TreeExplainer(base_models["xgb"][-1])
@@ -567,9 +667,14 @@ async def assess_student(profile: AssessRequest, background_tasks: BackgroundTas
         calibrated_probability=round(cal_prob, 4),
         p_model=round(p_model, 4), p_cohort=round(p_cohort, 4), p_blended=round(p_blended, 4),
         confidence_interval_90pct=ci, risk_tier=risk_tier,
-        recommendation=recommendations.get(risk_tier, "Decision pending"),
+        recommendation=recommendations.get(risk_tier, "Decision pending") + (
+            " Note: job market velocity data is being initialised. This assessment uses baseline demand values — reassess in 12 hours for full accuracy."
+            if temporal.estimated else ""
+        ),
         potential_score=round(features[4], 4),
         shap_contributions=shap_contributions, counterfactual=None, adverse_action=adverse_action,
+        fairness_applied=fairness_applied,
+        temporal_features_estimated=temporal.estimated,
         fairness_note="Audited for DPDP compliance and demographic parity",
         model_version=app.state.metrics.get("model_version", "unknown"), timestamp=datetime.utcnow().isoformat()
     )
@@ -604,24 +709,26 @@ async def student_loan_roi(
     """
     demand_lookup, velocity_lookup, market_hhi = {}, {}, 0.14
     try:
-        cache = json.load(open("data/pipeline/demand_cache.json"))
+        cache = json.load(open(EnvConfig.DATA_DIR() / "pipeline" / "demand_cache.json"))
         demand_lookup = {r["field"]: r["job_count_normalized"] for r in cache["records"]}
         from model.temporal_features import compute_demand_velocity, compute_hhi
         vel_df = compute_demand_velocity()
-        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
+        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"], "estimated": r["estimated"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
     except Exception as e:
         logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index()
+    macro_index = compute_macro_index(breaker=request.app.state.breakers["datagov"])
     starting_salary_norm = demand_lookup.get(profile.field_of_study, 0.5)
     
     # Get repayment probability (reuses existing assessment logic)
     feature_names = app.state.metrics.get("feature_cols_v3", [])
+    temporal_data = velocity_lookup.get(profile.field_of_study, {})
     temporal = TemporalFeatures(
-        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
-        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
-        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+        velocity=temporal_data.get("velocity", 0.0),
+        accel=temporal_data.get("accel", 0.0),
+        r2=temporal_data.get("r2", 0.0),
+        estimated=temporal_data.get("estimated", True)
     )
     market = MarketFeatures(
         demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),
@@ -718,21 +825,23 @@ async def student_skill_gap(
     """
     demand_lookup, velocity_lookup, market_hhi = {}, {}, 0.14
     try:
-        cache = json.load(open("data/pipeline/demand_cache.json"))
+        cache = json.load(open(EnvConfig.DATA_DIR() / "pipeline" / "demand_cache.json"))
         demand_lookup = {r["field"]: r["job_count_normalized"] for r in cache["records"]}
         from model.temporal_features import compute_demand_velocity, compute_hhi
         vel_df = compute_demand_velocity()
-        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"]} for r in vel_df.to_dict(orient="records")}
+        velocity_lookup = {r["field"]: {"velocity": r["demand_velocity_per_day"], "accel": r["demand_acceleration"], "r2": r["velocity_r_squared"], "estimated": r["estimated"]} for r in vel_df.to_dict(orient="records")}
         market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
     except Exception as e:
         logger.warning(f"Failed to load temporal context: {e}")
     
-    macro_index = compute_macro_index()
+    macro_index = compute_macro_index(breaker=request.app.state.breakers["datagov"])
     feature_names = app.state.metrics.get("feature_cols_v3", [])
+    temporal_data = velocity_lookup.get(profile.field_of_study, {})
     temporal = TemporalFeatures(
-        velocity=velocity_lookup.get(profile.field_of_study, {}).get("velocity", 0.0),
-        accel=velocity_lookup.get(profile.field_of_study, {}).get("accel", 0.0),
-        r2=velocity_lookup.get(profile.field_of_study, {}).get("r2", 0.0)
+        velocity=temporal_data.get("velocity", 0.0),
+        accel=temporal_data.get("accel", 0.0),
+        r2=temporal_data.get("r2", 0.0),
+        estimated=temporal_data.get("estimated", True)
     )
     market = MarketFeatures(
         demand_proxy=demand_lookup.get(profile.field_of_study, 0.5),

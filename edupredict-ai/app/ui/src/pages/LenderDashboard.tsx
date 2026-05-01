@@ -13,6 +13,7 @@ import ShapWaterfall from '@/components/ShapWaterfall'
 import ConformalInterval from '@/components/ConformalInterval'
 import FreshnessPanel from '@/components/FreshnessPanel'
 import AdverseActionCard from '@/components/AdverseActionCard'
+import TemporalWarningBanner from '@/components/TemporalWarningBanner'
 
 const FIELD_LABELS: Record<string, string> = {
   computer_science:       'Computer Science / IT',
@@ -265,6 +266,10 @@ export default function LenderDashboard() {
                   transition={{ duration: 0.4, ease: 'easeOut' }}
                   className="space-y-6"
                 >
+                  <TemporalWarningBanner 
+                    isEstimated={result.temporal_features_estimated} 
+                    fairnessApplied={result.fairness_applied} 
+                  />
                   {/* Hero result card */}
                   <div className={`bg-card border-l-4 ${RISK_BORDER[result.risk_tier]} border border-border rounded-3xl p-6`}>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
