@@ -57,7 +57,7 @@ pillow==12.2.0
 platformdirs==4.9.6
 plotly==6.7.0
 pluggy==1.6.0
-protobuf==7.34.1
+protobuf==4.25.3
 psycopg2-binary==2.9.12
 pyarrow==24.0.0
 pydantic==2.13.3
@@ -100,7 +100,7 @@ webencodings==0.5.1
 xgboost==3.2.0
 mlflow
 redis
-prometheus-fastapi-instrumentator
+prometheus-fastapi-instrumentator==6.1.0
 apscheduler
 evidently
 python-jose[cryptography]
@@ -109,3 +109,4 @@ sentence-transformers
 slowapi
 celery
 aiohttp
+prometheus-client==0.20.1

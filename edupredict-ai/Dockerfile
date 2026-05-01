@@ -18,7 +18,7 @@ WORKDIR /build
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --user --no-warn-script-location -r requirements.txt
+RUN pip install --prefix=/install -r requirements.txt
 
 # Build Frontend
 COPY app/ui/package*.json app/ui/
@@ -47,14 +47,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed python packages from builder
-COPY --from=builder /root/.local /home/appuser/.local
-ENV PATH=/home/appuser/.local/bin:$PATH
+COPY --from=builder /install /usr/local
 
 # Copy application code and built frontend
 COPY --chown=1000:1000 . .
-# Ensure static files from build stage are present (npm run build usually outputs to a dir)
-# If 'npm run build' outputs to 'app/api/static', it's already copied via 'COPY . .'
-# but let's be explicit if needed.
 
 # Security: Non-root user
 RUN useradd -m -u 1000 appuser && \

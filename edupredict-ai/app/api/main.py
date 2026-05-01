@@ -23,7 +23,8 @@ from model.data_builder import safe_load_artifact, get_nirf_salary_norm
 
 # Prometheus
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
 
 # Phase 4 Modules
 from app.api.auth import get_current_tenant
@@ -41,6 +42,49 @@ from config import EnvConfig
 logger = logging.getLogger(__name__)
 
 # Custom metrics
+assess_requests_total = Counter(
+  "edupredict_assess_requests_total",
+  "Total assessment requests",
+  ["risk_tier", "field_of_study", "fairness_applied"]
+)
+assess_latency_seconds = Histogram(
+  "edupredict_assess_latency_seconds",
+  "Assessment endpoint latency",
+  buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+)
+model_repayment_prob = Histogram(
+  "edupredict_repayment_probability",
+  "Distribution of repayment probabilities returned",
+  buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
+active_tenants = Gauge(
+  "edupredict_active_tenants",
+  "Number of unique tenants with assessments in last 24h"
+)
+
+assessments_total = Counter(
+    "edupredict_assessments_total",
+    "Total assessments run",
+    ["risk_tier", "field_of_study", "fairness_applied"]
+)
+
+assessment_duration = Histogram(
+    "edupredict_assessment_duration_seconds",
+    "Time taken to run a full assessment",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
+)
+
+model_auc_gauge = Gauge(
+    "edupredict_model_auc",
+    "Current model AUC loaded from artifacts"
+)
+
+circuit_breaker_state = Gauge(
+    "edupredict_circuit_breaker_open",
+    "1 if circuit is open, 0 if closed",
+    ["source"]
+)
+
 PREDICTION_COUNTER = Counter(
     "edupredict_predictions_total",
     "Total loan assessments",
@@ -115,6 +159,7 @@ async def lifespan(app: FastAPI):
         # Set gauges
         ECE_GAUGE.set(metrics.get("post_calibration_ece", 0))
         AUC_GAUGE.set(metrics.get("graph_regularised_auc", 0))
+        model_auc_gauge.set(metrics.get("auc", 0))
         
         # Load Group Thresholds for Fairness
         from model.fairness_calibration import load_group_thresholds
@@ -173,7 +218,19 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-Instrumentator().instrument(app).expose(app)
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+).instrument(app)
+
+@app.get("/metrics")
+async def metrics():
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -514,6 +571,7 @@ def _get_tenant_rate_limit(request: Request) -> int:
 @app.post("/v1/assess", response_model=AssessmentResponse)
 @limiter.limit("100/minute")
 async def assess_student(request: Request, profile: AssessRequest, background_tasks: BackgroundTasks, tenant: dict = Depends(get_current_tenant)):
+    start_time = time.perf_counter()
     # 0. Consent Check (Rate limit handled by decorator)
     if not profile.has_consent:
         raise HTTPException(status_code=422, detail="Explicit consent is required")
@@ -654,14 +712,14 @@ async def assess_student(request: Request, profile: AssessRequest, background_ta
 
     PREDICTION_COUNTER.labels(risk_tier, profile.field_of_study, tenant["tenant_id"]).inc()
     PREDICTION_PROBABILITY.observe(cal_prob)
-    
+
     recommendations = {
         "GREEN": "High repayment probability. Profile exhibits strong academic and market indicators. Approved for preferential interest rates.",
         "AMBER": "Moderate risk. Repayment probability meets baseline requirements but warrants additional collateral or co-signer verification.",
         "RED": "High risk detected. Model suggests significant variance in earning potential. Application requires manual underwriter review."
     }
-    
-    return AssessmentResponse(
+
+    result = AssessmentResponse(
         assessment_id=assessment_id,
         repayment_probability=round(p_blended, 4),
         calibrated_probability=round(cal_prob, 4),
@@ -678,6 +736,22 @@ async def assess_student(request: Request, profile: AssessRequest, background_ta
         fairness_note="Audited for DPDP compliance and demographic parity",
         model_version=app.state.metrics.get("model_version", "unknown"), timestamp=datetime.utcnow().isoformat()
     )
+
+    assessments_total.labels(
+        risk_tier=result.risk_tier,
+        field_of_study=profile.field_of_study,
+        fairness_applied=str(result.fairness_applied)
+    ).inc()
+
+    assess_requests_total.labels(
+      risk_tier=result.risk_tier,
+      field_of_study=profile.field_of_study,
+      fairness_applied=str(result.fairness_applied)
+    ).inc()
+    assess_latency_seconds.observe(time.perf_counter() - start_time)
+    model_repayment_prob.observe(result.repayment_probability)
+
+    return result
 
 @app.post("/v1/shadow/assess")
 async def shadow_assess(profile: StudentProfile, request: Request, existing_score: float = 0.0, tenant: dict = Depends(get_current_tenant)):
