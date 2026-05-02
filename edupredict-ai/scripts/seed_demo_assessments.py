@@ -20,7 +20,7 @@ async def seed_data(count, days, tenant_id, api_key):
     days_ago = np.random.poisson(lam=days/2, size=count)
     days_ago = np.clip(days_ago, 0, days)
     
-    async with httpx.AsyncClient(base_url="http://localhost:8000", headers={"X-API-Key": api_key}) as client:
+    async with httpx.AsyncClient(base_url="http://localhost:8000", headers={"X-API-Key": api_key}, timeout=15.0) as client:
         latencies = []
         outcomes = {"GREEN": 0, "AMBER": 0, "RED": 0}
         
@@ -78,9 +78,8 @@ async def seed_data(count, days, tenant_id, api_key):
         # Now backdate the assessments in the database
         import asyncpg
         try:
-            # We assume EnvConfig defaults or standard PG setup
-            # We can connect using the default local URL since we are running in the container
-            conn = await asyncpg.connect("postgresql://postgres:postgres@db:5432/edupredict")
+            from config import EnvConfig
+            conn = await asyncpg.connect(EnvConfig.DATABASE_URL())
             for a_id, d_ago in assessment_ids:
                 if d_ago > 0:
                     delta = timedelta(days=float(d_ago), hours=random.randint(0, 23), minutes=random.randint(0, 59))

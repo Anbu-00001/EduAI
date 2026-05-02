@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI):
             try:
                 async with app.state.db_pool.acquire() as conn:
                     result = await conn.fetchval(
-                        "SELECT COUNT(DISTINCT api_key_id) FROM api_calls WHERE timestamp >= NOW() - interval '24 hours'"
+                        "SELECT COUNT(DISTINCT api_key_id) FROM api_calls WHERE created_at >= NOW() - interval '24 hours'"
                     )
                     active_tenants.set(result or 0)
             except Exception as e:
@@ -290,7 +290,9 @@ async def get_live_metrics(request: Request, tenant: dict = Depends(get_current_
                 )
                 data = r.json()
                 if data.get("status") == "success" and data["data"]["result"]:
-                    results[key] = float(data["data"]["result"][0]["value"][1])
+                    val = float(data["data"]["result"][0]["value"][1])
+                    import math
+                    results[key] = None if math.isnan(val) else val
                 else:
                     results[key] = None
             except Exception:
@@ -1098,26 +1100,6 @@ async def health(request: Request):
         pass
     return {"status": "ok", "version": "5.0.0", "model_auc": auc, "model_version": version}
 
-# SPA / Static Serving (Catch-all)
-# This MUST be last to avoid shadowing API routes
-app.mount("/assets", StaticFiles(directory="app/api/static/assets"), name="assets")
-
-@app.get("/{path_name:path}")
-async def serve_spa(path_name: str):
-    """
-    Catch-all route to serve the React SPA.
-    1. Try to serve specific files from static root (e.g. vite.svg, manifest.json)
-    2. Fallback to index.html for any other route (handles React Router paths)
-    """
-    static_file = Path("app/api/static") / path_name
-    if static_file.exists() and static_file.is_file():
-        return FileResponse(static_file)
-    
-    index_path = Path("app/api/static/index.html")
-    if index_path.exists():
-        return HTMLResponse(content=index_path.read_text())
-    
-    return HTMLResponse(content="<h2>Frontend not built. Run: make build-ui</h2>", status_code=503)
 
 
 @app.get("/v1/stats/today")
@@ -1125,8 +1107,8 @@ async def stats_today(request: Request):
     try:
         import time
         async with request.app.state.db_pool.acquire() as conn:
-            decisions_today = await conn.fetchval("SELECT COUNT(*) FROM api_calls WHERE timestamp::date = CURRENT_DATE")
-            decisions_this_hour = await conn.fetchval("SELECT COUNT(*) FROM api_calls WHERE timestamp >= NOW() - interval '1 hour'")
+            decisions_today = await conn.fetchval("SELECT COUNT(*) FROM api_calls WHERE created_at::date = CURRENT_DATE")
+            decisions_this_hour = await conn.fetchval("SELECT COUNT(*) FROM api_calls WHERE created_at >= NOW() - interval '1 hour'")
         
         import httpx
         try:
@@ -1163,7 +1145,7 @@ async def get_cohort(request: Request, field: str, cgpa: float, loan_amount: flo
             JOIN assessments a ON a.id = ac.assessment_id
             WHERE a.profile_data::jsonb->>'field_of_study' = $1
               AND (a.profile_data::jsonb->>'cgpa')::numeric BETWEEN $2 - 0.5 AND $2 + 0.5
-              AND ac.timestamp >= NOW() - ($3 || ' days')::interval
+              AND ac.created_at >= NOW() - ($3 || ' days')::interval
             GROUP BY ac.risk_tier
         """, field, cgpa, str(days))
         
@@ -1183,10 +1165,10 @@ async def get_cohort(request: Request, field: str, cgpa: float, loan_amount: flo
 async def get_recent_assessments(request: Request, limit: int = 8, tenant: dict = Depends(get_current_tenant)):
     async with request.app.state.db_pool.acquire() as conn:
         records = await conn.fetch("""
-            SELECT assessment_id, risk_tier, prediction as repayment_probability, timestamp as created_at
+            SELECT assessment_id, risk_tier, prediction as repayment_probability, created_at
             FROM api_calls
             WHERE api_key_id = $1
-            ORDER BY timestamp DESC
+            ORDER BY created_at DESC
             LIMIT $2
         """, tenant['tenant_id'], min(limit, 50))
         return [dict(r) for r in records]
@@ -1224,9 +1206,9 @@ async def get_admin_recent_assessments(request: Request, limit: int = 100, tenan
         raise HTTPException(status_code=403, detail="Admin access required")
     async with request.app.state.db_pool.acquire() as conn:
         records = await conn.fetch("""
-            SELECT assessment_id, risk_tier, prediction as repayment_probability, timestamp as created_at, api_key_id as tenant_id, features_json
+            SELECT assessment_id, risk_tier, prediction as repayment_probability, created_at, api_key_id as tenant_id, features_json
             FROM api_calls
-            ORDER BY timestamp DESC
+            ORDER BY created_at DESC
             LIMIT $1
         """, min(limit, 100))
         res = []
@@ -1244,3 +1226,24 @@ async def get_admin_recent_assessments(request: Request, limit: int = 100, tenan
             d['latency'] = 120 + (_seed % 280)
             res.append(d)
         return res
+
+# SPA / Static Serving (Catch-all)
+# This MUST be last to avoid shadowing API routes
+app.mount("/assets", StaticFiles(directory="app/api/static/assets"), name="assets")
+
+@app.get("/{path_name:path}")
+async def serve_spa(path_name: str):
+    """
+    Catch-all route to serve the React SPA.
+    1. Try to serve specific files from static root (e.g. vite.svg, manifest.json)
+    2. Fallback to index.html for any other route (handles React Router paths)
+    """
+    static_file = Path("app/api/static") / path_name
+    if static_file.exists() and static_file.is_file():
+        return FileResponse(static_file)
+    
+    index_path = Path("app/api/static/index.html")
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text())
+    
+    return HTMLResponse(content="<h2>Frontend not built. Run: make build-ui</h2>", status_code=503)

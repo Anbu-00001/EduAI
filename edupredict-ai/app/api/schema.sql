@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS model_runs (
 
 CREATE TABLE IF NOT EXISTS consent_records (
     id SERIAL PRIMARY KEY,
-    consent_id VARCHAR(32) UNIQUE NOT NULL,
+    consent_id VARCHAR(64) UNIQUE NOT NULL,
     user_hash VARCHAR(64) NOT NULL,
     consent_given BOOLEAN NOT NULL,
     notice_version VARCHAR(10) NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     features_json JSONB NOT NULL,
     prediction FLOAT NOT NULL,
     risk_tier VARCHAR(10) NOT NULL,
-    api_key_id VARCHAR(32),
+    api_key_id VARCHAR(64),
     latency_ms INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -49,7 +49,7 @@ CREATE INDEX idx_api_calls_time ON api_calls(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS api_keys (
     id SERIAL PRIMARY KEY,
-    tenant_id VARCHAR(50) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL,
     key_hash VARCHAR(64) UNIQUE NOT NULL,
     rate_limit_rpm INTEGER NOT NULL DEFAULT 100,
     permissions JSONB NOT NULL DEFAULT '["assess"]'::jsonb,

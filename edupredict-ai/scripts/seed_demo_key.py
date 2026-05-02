@@ -17,6 +17,7 @@ async def seed():
     
     parser = argparse.ArgumentParser(description="Seed demo API key")
     parser.add_argument("--key", type=str, help="Demo API key to seed")
+    parser.add_argument("--tenant_id", type=str, default="demo_lender", help="Tenant ID")
     args = parser.parse_args()
 
     demo_key = args.key or os.environ.get("SEED_DEMO_KEY")
@@ -33,13 +34,13 @@ async def seed():
         return
 
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM api_keys WHERE tenant_id = 'demo_lender'")
+        await conn.execute(f"DELETE FROM api_keys WHERE tenant_id = '{args.tenant_id}'")
         await conn.execute("""
             INSERT INTO api_keys (tenant_id, key_hash, rate_limit_rpm, active)
-            VALUES ('demo_lender', $1, 1000, TRUE)
-        """, key_hash)
+            VALUES ($1, $2, 1000, TRUE)
+        """, args.tenant_id, key_hash)
 
-    print(f"✅ Demo key seeded for tenant 'demo_lender'")
+    print(f"✅ Demo key seeded for tenant '{args.tenant_id}'")
     print(f"   Plaintext key: {demo_key}")
     print("   Store this securely. It will not be shown again.")
 
