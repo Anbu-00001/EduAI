@@ -38,7 +38,11 @@ export interface AssessmentResponse {
   p_model:                    number
   p_cohort:                   number
   p_blended:                  number
+  /** Legacy nested confidence interval — prefer confidence_lower/confidence_upper */
   confidence_interval_90pct:  { lower: number; upper: number }
+  /** Flat confidence bounds (Phase 2+) — use these in preference to confidence_interval_90pct */
+  confidence_lower:           number
+  confidence_upper:           number
   risk_tier:                  'GREEN' | 'AMBER' | 'RED'
   recommendation:             string
   potential_score:            number

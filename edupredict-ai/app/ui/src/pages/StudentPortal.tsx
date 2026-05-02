@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronLeft, AlertTriangle, Loader2, ShieldCheck, XCircle, Banknote, Users, BarChart3, TrendingUp, CheckCircle2, ExternalLink, Sparkles } from 'lucide-react'
+import { ChevronLeft, AlertTriangle, Loader2, ShieldCheck, XCircle, Banknote, Users, BarChart3, TrendingUp, CheckCircle2, ExternalLink, Sparkles, Clock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -10,6 +10,16 @@ import { useStudentSession } from '@/hooks/useStudentSession'
 import { useStudentAssess } from '@/hooks/useStudentAssess'
 import { apiClient } from '@/api/client'
 
+// Frontend-side NPTEL lookup for DEFAULT_ACTIONS fallback when API is unavailable
+const NPTEL_TOP_BY_FIELD: Record<string, { name: string; url: string; institute: string }> = {
+  computer_science:       { name: 'Programming in Python',                           url: 'https://nptel.ac.in/courses/106106145', institute: 'IIT Madras' },
+  data_science:           { name: 'Machine Learning for Engineering & Science',       url: 'https://nptel.ac.in/courses/106106198', institute: 'IIT Madras' },
+  mba_finance:            { name: 'Financial Management',                             url: 'https://nptel.ac.in/courses/110104073', institute: 'IIT Kharagpur' },
+  mechanical_engineering: { name: 'Fluid Mechanics',                                  url: 'https://nptel.ac.in/courses/112105174', institute: 'IIT Madras' },
+  electrical_engineering: { name: 'Embedded Systems',                                 url: 'https://nptel.ac.in/courses/108101091', institute: 'IIT Kharagpur' },
+  civil_engineering:      { name: 'Structural Analysis',                              url: 'https://nptel.ac.in/courses/105106051', institute: 'IIT Madras' },
+  biotechnology:          { name: 'Molecular Biology',                                url: 'https://nptel.ac.in/courses/102106067', institute: 'IIT Madras' },
+}
 
 const FIELD_LABELS: Record<string, string> = {
   computer_science: 'Computer Science / IT',
@@ -93,7 +103,6 @@ export default function StudentPortal() {
                 </div>
               )}
 
-
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 bg-card border border-border p-6 rounded-3xl">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -134,7 +143,7 @@ export default function StudentPortal() {
                     <input type="number" {...register('annual_family_income_inr', { setValueAs: v => v === "" ? undefined : Number(v) })} className="w-full bg-bg border border-border rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-blue transition-all" />
                   </div>
                 </div>
-                
+
                 <div className="pt-4 border-t border-border flex items-start gap-3">
                   <input type="checkbox" id="consent" {...register('has_consent')} className="mt-1" />
                   <label htmlFor="consent" className="text-xs text-slate-400 leading-relaxed">
@@ -170,14 +179,19 @@ export default function StudentPortal() {
 }
 
 function ResultPanel({ result, reset, profile }: { result: any, reset: () => void, profile: any }) {
-  const prob_pct = Math.round(result.calibrated_probability * 100);
-  const confidence_lower = result.confidence_interval_90pct.lower;
-  const confidence_upper = result.confidence_interval_90pct.upper;
-  const emi_monthly = profile.loan_amount_inr * 0.00926;
-  const dti = profile.annual_family_income_inr ? (emi_monthly * 12) / profile.annual_family_income_inr : null;
-  const peer_pct = Math.round((result.potential_score || 0) * 100);
-  const field_demand_pct = Math.round((profile.college_placement_rate || 0) * 100); // proxy if missing from API
-  const demand_proxy = profile.college_placement_rate ? profile.college_placement_rate / 100 : 0.5; // proxy
+  // Bug Fix 6: use repayment_probability as primary, calibrated_probability as fallback
+  const prob = result.repayment_probability ?? result.calibrated_probability ?? 0.5
+  const prob_pct = Math.round(prob * 100)
+
+  // Bug Fix 2: use flat confidence_lower/confidence_upper fields
+  const confidence_lower = result.confidence_lower ?? result.confidence_interval_90pct?.lower ?? 0
+  const confidence_upper = result.confidence_upper ?? result.confidence_interval_90pct?.upper ?? 1
+
+  const emi_monthly = profile.loan_amount_inr * 0.00926
+  const dti = profile.annual_family_income_inr ? (emi_monthly * 12) / profile.annual_family_income_inr : null
+  const peer_pct = Math.round((result.potential_score || 0) * 100)
+  const field_demand_pct = Math.round((profile.college_placement_rate || 0) * 100)
+  const demand_proxy = profile.college_placement_rate ? profile.college_placement_rate / 100 : 0.5
 
   const { data: skillGap, isLoading: skillGapLoading } = useQuery({
     queryKey: ['skillGap', profile],
@@ -186,6 +200,7 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
         ...profile,
         user_hash: sessionStorage.getItem('ep_student_hash') || 'anonymous',
       }
+      // Bug Fix 1: baseURL is /v1, so use path without /v1 prefix
       const res = await apiClient.post('/student/skill-gap', payload)
       return res.data
     },
@@ -193,45 +208,83 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
     retry: 1,
   })
 
+  // Field-specific NPTEL fallback when API hasn't responded yet
+  const fieldNptel = NPTEL_TOP_BY_FIELD[profile.field_of_study] || NPTEL_TOP_BY_FIELD['computer_science']
+
   const skillActions = skillGap?.priority_actions?.slice(0, 3).map((a: any) => ({
     priority_i: a.rank,
     action: a.action,
     time_estimate: `~${a.time_months} month${a.time_months !== 1 ? 's' : ''}`,
     effort_score: a.effort_score,
     probability_lift: a.probability_lift,
-    resource_url: a.resources?.[0] ? `https://${a.resources[0]}` : undefined,
-    resource_label: a.resources?.[0]?.split('.')[0] || 'Resource',
+    resource_url: a.resources?.[0] || undefined,
+    resource_label: a.resources?.[0] ? (a.resources[0].replace(/^https?:\/\//, '').split('/')[0]) : 'Resource',
   })) ?? null
 
-  const tier = result.risk_tier;
-  const tierColor = tier === 'GREEN' ? '#22c55e' : tier === 'AMBER' ? '#f59e0b' : '#ef4444';
-  const tierFilter = tier === 'GREEN' ? 'drop-shadow(0 0 8px #22c55e80)' : tier === 'AMBER' ? 'drop-shadow(0 0 8px #f59e0b80)' : 'drop-shadow(0 0 8px #ef444480)';
-  const badgeLabel = tier === 'GREEN' ? 'LOW RISK' : tier === 'AMBER' ? 'MODERATE' : 'HIGH RISK';
+  const tier = result.risk_tier
+  const tierColor = tier === 'GREEN' ? '#22c55e' : tier === 'AMBER' ? '#f59e0b' : '#ef4444'
+  const tierFilter = tier === 'GREEN' ? 'drop-shadow(0 0 8px #22c55e80)' : tier === 'AMBER' ? 'drop-shadow(0 0 8px #f59e0b80)' : 'drop-shadow(0 0 8px #ef444480)'
+  const badgeLabel = tier === 'GREEN' ? 'LOW RISK' : tier === 'AMBER' ? 'MODERATE' : 'HIGH RISK'
 
-  const r = 100;
-  const cx = 110;
-  const cy = 120;
-  const circumference = Math.PI * r;
-  const [dashoffset, setDashoffset] = useState(circumference);
+  const r = 100
+  const cx = 110
+  const cy = 120
+  const circumference = Math.PI * r
+  const [dashoffset, setDashoffset] = useState(circumference)
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDashoffset(circumference * (1 - result.calibrated_probability));
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [result.calibrated_probability, circumference]);
+      // Bug Fix 6: animate gauge using the consistent prob value
+      setDashoffset(circumference * (1 - prob))
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [prob, circumference])
 
   const factors = [
     { label: "Academic Score", value: profile.cgpa / 10 },
     { label: "Practical Exp.", value: Math.min(profile.internships_count / 3, 1) },
     { label: "Field Placement", value: (profile.college_placement_rate || 0) / 100 },
     { label: "Market Demand", value: demand_proxy },
-  ];
+  ]
 
-  const Icon = tier === 'GREEN' ? ShieldCheck : tier === 'AMBER' ? AlertTriangle : XCircle;
+  const Icon = tier === 'GREEN' ? ShieldCheck : tier === 'AMBER' ? AlertTriangle : XCircle
+
+  // Feature 4: Timeline to GREEN — derive from skill gap data
+  const timelineMonths = skillGap?.estimated_time_to_green_months
+    ?? (skillActions?.reduce((acc: number, a: any) => acc + (parseInt(a.time_estimate) || 1), 0) ?? 6)
+
+  const milestones = (skillActions || []).slice(0, 3).map((a: any, i: number) => ({
+    label: a.action.split(' ').slice(0, 4).join(' ') + (a.action.split(' ').length > 4 ? '…' : ''),
+    month: (i + 1) * Math.round(timelineMonths / 3),
+  }))
 
   return (
     <div className="flex flex-col gap-4">
+
+      {/* Feature 2C: Backlog alert — shown above hero when backlogs > 0 */}
+      {profile.backlogs > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-start gap-3 mb-4"
+        >
+          <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-300">
+              {profile.backlogs === 1
+                ? "You have 1 unresolved backlog"
+                : `You have ${profile.backlogs} unresolved backlogs`}
+            </p>
+            <p className="text-xs text-amber-400/80 mt-1">
+              Most Indian banks and NBFCs treat backlogs as the primary academic
+              risk signal. Clearing {profile.backlogs === 1 ? 'it' : 'them'} before
+              applying improves your approval odds significantly.
+              {profile.backlogs >= 5 && " With 5+ backlogs, most public sector banks will require written justification and a strong co-applicant."}
+            </p>
+          </div>
+        </motion.div>
+      )}
+
       {/* ROW 1: Hero score strip */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
@@ -268,6 +321,7 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
             />
           </svg>
           <div className="absolute top-[50px] flex flex-col items-center">
+            {/* Bug Fix 6: display prob_pct (derived from repayment_probability) */}
             <span style={{ fontSize: '44px', fontWeight: 700, color: tierColor, lineHeight: 1 }}>{prob_pct}%</span>
             <span className="text-slate-400" style={{ fontSize: '11px' }}>repayment likelihood</span>
             <span className="mt-2 text-white px-2 py-0.5 rounded-full" style={{ fontSize: '10px', backgroundColor: tierColor, textTransform: 'uppercase' }}>
@@ -280,6 +334,7 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
         <div className="w-full md:w-[30%] flex flex-col justify-center">
           <span className="text-slate-400 uppercase mb-2" style={{ fontSize: '11px' }}>90% Confidence Band</span>
           <div className="w-full h-[56px] bg-slate-800/50 rounded-xl relative flex items-center">
+            {/* Bug Fix 2: use flat confidence_lower/confidence_upper */}
             <div
               className="absolute h-full rounded-xl flex items-center justify-between px-2"
               style={{
@@ -294,7 +349,7 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
             </div>
             <div
               className="absolute top-0 bottom-0 w-0.5 bg-white group cursor-help z-10"
-              style={{ left: `${result.calibrated_probability * 100}%` }}
+              style={{ left: `${prob * 100}%` }}
               title={`Point estimate: ${prob_pct}%`}
             />
           </div>
@@ -462,9 +517,18 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
           </div>
         </div>
 
+        {/* Bug Fix 5: actions are already sorted ascending by rank (rank 1 first) from API */}
         <div className="flex flex-nowrap overflow-x-auto gap-4 pb-4 w-full relative" style={{ scrollbarWidth: 'none' }}>
           {(skillActions || [
-            { priority_i: 1, action: 'Complete domain certification (NPTEL)', time_estimate: '~1 month', effort_score: 3, probability_lift: 0.03, resource_url: 'https://nptel.ac.in', resource_label: 'NPTEL' },
+            {
+              priority_i: 1,
+              action: `Complete NPTEL: ${fieldNptel.name} (${fieldNptel.institute})`,
+              time_estimate: '~3 months',
+              effort_score: 4,
+              probability_lift: 0.05,
+              resource_url: fieldNptel.url,
+              resource_label: 'NPTEL',
+            },
             { priority_i: 2, action: 'Build 2 portfolio projects on GitHub', time_estimate: '~2 months', effort_score: 5, probability_lift: 0.05, resource_url: 'https://kaggle.com', resource_label: 'Kaggle' },
             { priority_i: 3, action: 'Complete 1 more internship', time_estimate: '~3 months', effort_score: 7, probability_lift: 0.08, resource_url: 'https://internshala.com', resource_label: 'Internshala' }
           ]).map((action: any, idx: number) => (
@@ -496,11 +560,96 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
         <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-[#0a0f1e] to-transparent pointer-events-none" />
       </motion.div>
 
+      {/* Feature 4: Timeline to GREEN — only when tier !== 'GREEN' and we have skill actions */}
+      {tier !== 'GREEN' && skillActions && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: "easeOut", delay: 0.40 }}
+          className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-5"
+        >
+          <div className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <Clock size={14} className="text-slate-400" />
+            Your path to GREEN
+            <span className="text-xs font-normal text-emerald-400 ml-2">
+              ~{timelineMonths} months
+            </span>
+          </div>
+          <div className="relative flex items-center">
+            {/* Base line */}
+            <div className="absolute left-0 right-0 h-0.5 bg-slate-700 top-3" />
+            {/* Now dot */}
+            <div className="relative flex flex-col items-center mr-8">
+              <div className="w-3 h-3 rounded-full bg-slate-600 border-2 border-slate-500 z-10" />
+              <span className="text-[10px] text-slate-500 mt-2">Now</span>
+              <span className="text-[9px]" style={{ color: tierColor }}>{badgeLabel}</span>
+            </div>
+            {/* Milestone dots */}
+            {milestones.map((m: { label: string; month: number }, i: number) => (
+              <div key={i} className="relative flex flex-col items-center mx-auto">
+                <div className="w-3 h-3 rounded-full z-10" style={{ backgroundColor: tierColor, opacity: 0.6 + i * 0.2 }} />
+                <span className="text-[9px] text-slate-500 mt-2 text-center max-w-[70px]">{m.label}</span>
+                <span className="text-[9px] text-slate-600">Mo. {m.month}</span>
+              </div>
+            ))}
+            {/* GREEN target */}
+            <div className="relative flex flex-col items-center ml-auto">
+              <div className="w-4 h-4 rounded-full bg-emerald-500 z-10 flex items-center justify-center">
+                <span className="text-[8px] text-white font-bold">✓</span>
+              </div>
+              <span className="text-[10px] text-emerald-400 mt-2">GREEN</span>
+              <span className="text-[9px] text-slate-500">Mo. {timelineMonths}</span>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Feature 3: Gen Z Advantage card — AMBER or RED students only */}
+      {(tier === 'AMBER' || tier === 'RED') && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: "easeOut", delay: 0.50 }}
+          className="w-full bg-gradient-to-r from-indigo-500/10 to-blue-500/10 border border-indigo-500/20 rounded-2xl p-5"
+        >
+          <div className="flex items-start gap-3">
+            <div className="text-2xl">⚡</div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-indigo-300 mb-1">
+                Your Gen Z Advantage
+              </p>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                57% of Indian Gen Z are already choosing skills over salary.
+                Lenders are beginning to recognise certifications, freelance work,
+                and side projects as income signals — not just CGPA.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: "Upskilling weekly", value: "85%", note: "of Gen Z in India" },
+                  { label: "Freelance + job", value: "43%", note: "prefer hybrid income" },
+                  { label: "Career optimism", value: "77%", note: "net positive outlook" },
+                ].map((stat, i) => (
+                  <div key={i} className="bg-indigo-500/10 rounded-xl p-3 text-center">
+                    <p className="text-lg font-bold text-indigo-300">{stat.value}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{stat.label}</p>
+                    <p className="text-[9px] text-slate-500">{stat.note}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-500 mt-3 italic">
+                Source: Deloitte Global Gen Z & Millennial Survey India 2025 ·
+                Naukri Skills Report 2025-26
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* ROW 4: Reassess strip */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut", delay: 0.42 }}
+        transition={{ duration: 0.4, ease: "easeOut", delay: 0.60 }}
         className="w-full pt-4 border-t border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4"
       >
         <div className="font-mono text-slate-500" style={{ fontSize: '11px' }}>
@@ -520,4 +669,3 @@ function ResultPanel({ result, reset, profile }: { result: any, reset: () => voi
     </div>
   )
 }
-

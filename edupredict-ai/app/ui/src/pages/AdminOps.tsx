@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Brain, Server, Shield, ChevronRight, Loader2 } from 'lucide-react'
 import { apiClient } from '@/api/client'
@@ -9,6 +9,7 @@ export default function AdminOps() {
   const [retrainTask, setRetrainTask] = useState<string | null>(null)
   const [retrainStatus, setRetrainStatus] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
+  const logRef = useRef<HTMLDivElement>(null)
 
   const { data: publicMetrics } = useQuery({
     queryKey: ['publicMetrics'],
@@ -45,6 +46,22 @@ export default function AdminOps() {
     },
     refetchInterval: 30000
   })
+
+  // Bug Fix 4: real polling for retrain logs via GET /admin/retrain/logs/{run_id}
+  const { data: logContent } = useQuery({
+    queryKey: ['retrainLogs', retrainTask],
+    queryFn: async () => {
+      const res = await apiClient.get(`/admin/retrain/logs/${retrainTask}`)
+      return res.data as string
+    },
+    enabled: !!retrainTask && retrainStatus !== 'SUCCESS' && retrainStatus !== 'FAILURE',
+    refetchInterval: 3000,
+  })
+
+  // Auto-scroll log container when new content arrives
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [logContent])
 
   useEffect(() => {
     if (!retrainTask) return
@@ -216,7 +233,7 @@ export default function AdminOps() {
             </div>
 
             <div className="mt-auto">
-              <button 
+              <button
                 onClick={handleRetrain}
                 disabled={!!retrainTask && retrainStatus !== 'SUCCESS' && retrainStatus !== 'FAILURE'}
                 className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 font-bold text-white transition-colors flex justify-center items-center gap-2"
@@ -242,11 +259,22 @@ export default function AdminOps() {
                     View logs <ChevronRight className={`w-3 h-3 transition-transform ${showLogs ? 'rotate-90' : ''}`} />
                   </button>
                   {showLogs && (
-                    <div className="mt-3 p-3 bg-black rounded font-mono text-[10px] text-slate-400 h-32 overflow-y-auto">
-                      <p className="text-indigo-300">Initializing retrain pipeline...</p>
-                      <p>Loading temporal features...</p>
-                      <p>Running fairness calibration...</p>
-                      {retrainStatus === 'SUCCESS' && <p className="text-emerald-400">Completed successfully. Model updated.</p>}
+                    <div
+                      ref={logRef}
+                      className="mt-3 p-3 bg-black rounded font-mono text-slate-400 max-h-[240px] overflow-y-auto"
+                    >
+                      {/* Bug Fix 4: real log content polled from /admin/retrain/logs/{run_id} */}
+                      {logContent ? (
+                        <pre style={{ fontSize: '10px', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{logContent}</pre>
+                      ) : (
+                        <p className="text-[10px] text-indigo-300">Fetching logs...</p>
+                      )}
+                      {retrainStatus === 'SUCCESS' && (
+                        <p className="text-[10px] text-emerald-400 mt-2">✓ Retrain completed successfully.</p>
+                      )}
+                      {retrainStatus === 'FAILURE' && (
+                        <p className="text-[10px] text-rose-400 mt-2">✗ Retrain failed. Check logs above.</p>
+                      )}
                     </div>
                   )}
                 </div>

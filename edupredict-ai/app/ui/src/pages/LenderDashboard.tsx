@@ -198,7 +198,7 @@ export default function LenderDashboard() {
                       {result.risk_tier === 'GREEN' ? 'APPROVE' : result.risk_tier === 'AMBER' ? 'REVIEW' : 'DECLINE'}
                     </h2>
                     <p className="text-sm text-slate-300 mt-2 font-medium">{(result.calibrated_probability * 100).toFixed(1)}% repayment likelihood</p>
-                    <p className="text-[11px] text-slate-500 mt-1">Confidence band: {(result.confidence_interval_90pct.lower * 100).toFixed(1)}% – {(result.confidence_interval_90pct.upper * 100).toFixed(1)}%</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Confidence band: {((result.confidence_lower ?? result.confidence_interval_90pct?.lower ?? 0) * 100).toFixed(1)}% – {((result.confidence_upper ?? result.confidence_interval_90pct?.upper ?? 1) * 100).toFixed(1)}%</p>
                   </div>
                   <div className="flex gap-2 mt-6">
                     {result.fairness_applied && (
@@ -275,19 +275,25 @@ export default function LenderDashboard() {
                   <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4 flex items-center gap-2">
                     <PieChartIcon className="w-3 h-3" /> Cohort Analysis
                   </p>
-                  {cohortData?.insufficient_cohort ? (
-                    <div className="h-24 flex items-center justify-center text-xs text-slate-500 text-center">
-                      Insufficient cohort data — using model priors
+                  {/* Bug Fix 3: show placeholder when insufficient data */}
+                  {(!cohortData || cohortData?.count < 5 || cohortData?.insufficient_cohort) ? (
+                    <div className="flex flex-col items-center justify-center h-24 gap-2">
+                      <span className="text-2xl">🔍</span>
+                      <p className="text-xs text-slate-500 text-center">
+                        Fewer than 5 similar profiles in the last 30 days.
+                        <br/>Showing model-prior distribution.
+                      </p>
                     </div>
                   ) : (
                     <div className="flex items-center gap-4">
                       <div className="w-[100px] h-[100px] shrink-0">
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
+                            {/* Bug Fix 3: replace 0 with 0.001 to prevent recharts gap rendering */}
                             <Pie data={[
-                              { name: 'GREEN', value: cohortData?.distribution?.GREEN || 0 },
-                              { name: 'AMBER', value: cohortData?.distribution?.AMBER || 0 },
-                              { name: 'RED', value: cohortData?.distribution?.RED || 0 }
+                              { name: 'GREEN', value: Math.max(cohortData.distribution.GREEN, 0.001) },
+                              { name: 'AMBER', value: Math.max(cohortData.distribution.AMBER, 0.001) },
+                              { name: 'RED',   value: Math.max(cohortData.distribution.RED,   0.001) },
                             ]} cx="50%" cy="50%" innerRadius={30} outerRadius={45} dataKey="value" stroke="none">
                               <Cell fill={RISK_COLORS.GREEN} />
                               <Cell fill={RISK_COLORS.AMBER} />
@@ -297,11 +303,11 @@ export default function LenderDashboard() {
                         </ResponsiveContainer>
                       </div>
                       <div className="text-xs text-slate-400">
-                        <p className="mb-2">Among <span className="text-white font-medium">{cohortData?.count || 0}</span> similar borrowers in the last 30 days:</p>
+                        <p className="mb-2">Among <span className="text-white font-medium">{cohortData.count}</span> similar borrowers in the last 30 days:</p>
                         <div className="space-y-1">
-                          <p>✓ <span className="text-emerald-400">{((cohortData?.distribution?.GREEN || 0) / (cohortData?.count || 1) * 100).toFixed(0)}%</span> approved</p>
-                          <p>⚠ <span className="text-amber-400">{((cohortData?.distribution?.AMBER || 0) / (cohortData?.count || 1) * 100).toFixed(0)}%</span> reviewed</p>
-                          <p>✗ <span className="text-rose-400">{((cohortData?.distribution?.RED || 0) / (cohortData?.count || 1) * 100).toFixed(0)}%</span> declined</p>
+                          <p>✓ <span className="text-emerald-400">{((cohortData.distribution.GREEN) / cohortData.count * 100).toFixed(0)}%</span> approved</p>
+                          <p>⚠ <span className="text-amber-400">{((cohortData.distribution.AMBER) / cohortData.count * 100).toFixed(0)}%</span> reviewed</p>
+                          <p>✗ <span className="text-rose-400">{((cohortData.distribution.RED) / cohortData.count * 100).toFixed(0)}%</span> declined</p>
                         </div>
                       </div>
                     </div>
@@ -336,30 +342,39 @@ export default function LenderDashboard() {
                   <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-4 flex items-center gap-2">
                     <Activity className="w-3 h-3" /> Model Confidence
                   </p>
-                  <div>
-                    <p className="text-[22px] font-semibold text-slate-200">
-                      {((result.confidence_interval_90pct.upper - result.confidence_interval_90pct.lower) * 100).toFixed(1)}% band
-                    </p>
-                    <p className="text-xs text-slate-400">90% conformal interval width</p>
-                  </div>
-                  <div className="h-[60px] mt-2 mb-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={ciMetrics || Array.from({length: 7}, (_, i) => ({ day: i, width: 15 + Math.random()*5 }))}>
-                        <Line type="monotone" dataKey="width" stroke="#64748b" strokeWidth={2} dot={false} isAnimationActive={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="flex items-center justify-between mt-auto">
-                    <p className="text-[10px] text-slate-500">Lower band width = higher prediction certainty</p>
-                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-                      (result.confidence_interval_90pct.upper - result.confidence_interval_90pct.lower) < 0.1 ? 'bg-emerald-500/20 text-emerald-400' :
-                      (result.confidence_interval_90pct.upper - result.confidence_interval_90pct.lower) < 0.2 ? 'bg-amber-500/20 text-amber-400' :
-                      'bg-rose-500/20 text-rose-400'
-                    }`}>
-                      {(result.confidence_interval_90pct.upper - result.confidence_interval_90pct.lower) < 0.1 ? 'TIGHT' :
-                       (result.confidence_interval_90pct.upper - result.confidence_interval_90pct.lower) < 0.2 ? 'MODERATE' : 'WIDE'}
-                    </span>
-                  </div>
+                  {/* Bug Fix 2: use flat confidence_lower/confidence_upper */}
+                  {(() => {
+                    const ci_lower = result.confidence_lower ?? result.confidence_interval_90pct?.lower ?? 0
+                    const ci_upper = result.confidence_upper ?? result.confidence_interval_90pct?.upper ?? 1
+                    const ci_width = ci_upper - ci_lower
+                    return (
+                      <>
+                        <div>
+                          <p className="text-[22px] font-semibold text-slate-200">
+                            {(ci_width * 100).toFixed(1)}% band
+                          </p>
+                          <p className="text-xs text-slate-400">90% conformal interval width</p>
+                        </div>
+                        <div className="h-[60px] mt-2 mb-2">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={ciMetrics || Array.from({length: 7}, (_, i) => ({ day: i, width: 15 + Math.random()*5 }))}>
+                              <Line type="monotone" dataKey="width" stroke="#64748b" strokeWidth={2} dot={false} isAnimationActive={false} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="flex items-center justify-between mt-auto">
+                          <p className="text-[10px] text-slate-500">Lower band width = higher prediction certainty</p>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                            ci_width < 0.1 ? 'bg-emerald-500/20 text-emerald-400' :
+                            ci_width < 0.2 ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-rose-500/20 text-rose-400'
+                          }`}>
+                            {ci_width < 0.1 ? 'TIGHT' : ci_width < 0.2 ? 'MODERATE' : 'WIDE'}
+                          </span>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
 

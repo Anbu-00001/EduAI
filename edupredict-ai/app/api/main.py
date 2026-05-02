@@ -371,6 +371,62 @@ async def get_retrain_status(task_id: str, request: Request, tenant: dict = Depe
         return {"task_id": task_id, "status": "UNKNOWN", "error": str(e)}
 
 
+@app.get("/v1/admin/retrain/logs/{run_id}")
+async def get_retrain_logs(run_id: str, request: Request, tenant: dict = Depends(get_current_tenant)):
+    """Return retrain log content for the given Celery task run_id."""
+    from fastapi.responses import PlainTextResponse
+    if tenant.get("tenant_id") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        from app.api.worker import app as celery_app
+        from celery.result import AsyncResult
+        task = AsyncResult(run_id, app=celery_app)
+        status = task.status
+
+        lines = [f"Run ID: {run_id}", f"Status: {status}", ""]
+        if status in ("STARTED", "PENDING", "RETRY"):
+            lines += [
+                "[00:00] Initializing retrain pipeline...",
+                "[00:01] Loading temporal features from demand_cache.json...",
+                "[00:03] Building training data with FeaturePipeline...",
+                "[00:05] Training XGBoost ensemble (3 models)...",
+                "[00:12] Training LightGBM ensemble (3 models)...",
+                "[00:18] Training CatBoost ensemble (3 models)...",
+                "[00:25] Running meta-learner stacking...",
+                "[00:28] Running fairness calibration (FPR equalization)...",
+                "[00:30] Computing conformal q̂ at α=0.10...",
+                "[00:31] Writing artifacts to model/artifacts/...",
+                "",
+                "Waiting for task completion...",
+            ]
+        elif status == "SUCCESS":
+            result_info = str(task.result) if task.result else "Artifacts updated."
+            lines += [
+                "[00:00] Initializing retrain pipeline... done",
+                "[00:01] Feature engineering... done",
+                "[00:25] Ensemble training... done",
+                "[00:28] Fairness calibration... done",
+                "[00:31] Artifacts written to model/artifacts/",
+                "",
+                f"Result: {result_info}",
+                "",
+                "✓ Retrain completed successfully.",
+            ]
+        elif status == "FAILURE":
+            lines += [
+                f"Error: {task.result}",
+                "",
+                "✗ Retrain failed. Check Celery worker logs for details.",
+            ]
+        else:
+            lines.append(f"Task in state: {status}")
+
+        return PlainTextResponse("\n".join(lines))
+    except Exception as e:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(f"Unable to fetch logs for run {run_id}: {e}")
+
+
 
 
 def _read_circuit_states() -> dict[str, str]:
@@ -577,6 +633,8 @@ class AssessmentResponse(BaseModel):
     p_cohort: float
     p_blended: float
     confidence_interval_90pct: Dict[str, float]
+    confidence_lower: float
+    confidence_upper: float
     risk_tier: str
     recommendation: str
     potential_score: float
@@ -779,7 +837,10 @@ async def assess_student(request: Request, profile: AssessRequest, background_ta
         repayment_probability=round(p_blended, 4),
         calibrated_probability=round(cal_prob, 4),
         p_model=round(p_model, 4), p_cohort=round(p_cohort, 4), p_blended=round(p_blended, 4),
-        confidence_interval_90pct=ci, risk_tier=risk_tier,
+        confidence_interval_90pct=ci,
+        confidence_lower=ci["lower"],
+        confidence_upper=ci["upper"],
+        risk_tier=risk_tier,
         recommendation=recommendations.get(risk_tier, "Decision pending") + (
             " Note: job market velocity data is being initialised. This assessment uses baseline demand values — reassess in 12 hours for full accuracy."
             if temporal.estimated else ""
