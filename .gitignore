@@ -4,7 +4,11 @@ __pycache__/
 .ipynb_checkpoints/
 data/raw/
 data/processed/
-model/artifacts/*.pkl
+!model/artifacts/meta_model.pkl
+!model/artifacts/base_models.pkl
+!model/artifacts/scaler.pkl
+!model/artifacts/y_train.npy
+!model/artifacts/X_train_sc.npy
 model/artifacts/shap_*.png
 merged_cols.txt
 check_output.txt
