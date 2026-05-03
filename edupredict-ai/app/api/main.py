@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
         from model.fairness_calibration import load_group_thresholds
         try:
             app.state.group_thresholds = load_group_thresholds(Path(base_path))
-            logger.info("✅ Fairness Calibration: Group thresholds loaded.")
+            logger.info("Fairness Calibration: Group thresholds loaded.")
         except FileNotFoundError:
             logger.warning(
                 "group_thresholds.json not found. Fairness calibration has not been run. "
@@ -179,9 +179,9 @@ async def lifespan(app: FastAPI):
             "datagov": CircuitBreaker("datagov", failure_threshold=3, recovery_timeout=60)
         }
 
-        logger.info("✅ EduPredict AI v5.0: Production artifacts and Monitoring active.")
+        logger.info("EduPredict AI v5.0: Production artifacts and Monitoring active.")
     except Exception as e:
-        logger.error(f"❌ Startup Error: {e}")
+        logger.error(f"Startup Error: {e}")
 
     # Start Scheduler
     app.state.scheduler = create_scheduler()
@@ -410,13 +410,13 @@ async def get_retrain_logs(run_id: str, request: Request, tenant: dict = Depends
                 "",
                 f"Result: {result_info}",
                 "",
-                "✓ Retrain completed successfully.",
+                "Retrain completed successfully.",
             ]
         elif status == "FAILURE":
             lines += [
                 f"Error: {task.result}",
                 "",
-                "✗ Retrain failed. Check Celery worker logs for details.",
+                "Retrain failed. Check Celery worker logs for details.",
             ]
         else:
             lines.append(f"Task in state: {status}")
@@ -1287,6 +1287,42 @@ async def get_admin_recent_assessments(request: Request, limit: int = 100, tenan
             d['latency'] = 120 + (_seed % 280)
             res.append(d)
         return res
+
+@app.get("/v1/admin/confusion-matrix")
+async def get_confusion_matrix(request: Request, tenant: dict = Depends(get_current_tenant)):
+    if tenant.get("tenant_id") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
+    X = request.app.state.X_train
+    y = request.app.state.y_train
+    base_models = request.app.state.base_models
+    xgb_p = np.mean([m.predict_proba(X)[:, 1] for m in base_models["xgb"]], axis=0)
+    lgb_p = np.mean([m.predict(X) for m in base_models["lgb"]], axis=0)
+    cat_p = np.mean([m.predict_proba(X)[:, 1] for m in base_models["cat"]], axis=0)
+    p_model = request.app.state.meta_model.predict_proba(np.column_stack([xgb_p, lgb_p, cat_p]))[:, 1]
+    cal_params = request.app.state.calibration
+    if cal_params.get("method") == "isotonic":
+        bins_arr = np.array(cal_params["bins"])
+        lookup_arr = np.array(cal_params["lookup"])
+        idxs = np.clip(np.searchsorted(bins_arr, p_model, side="right") - 1, 0, len(lookup_arr) - 1)
+        cal_probs = lookup_arr[idxs].astype(float)
+    else:
+        A = cal_params.get("A", 1.0)
+        B = cal_params.get("B", 0.0)
+        cal_probs = 1.0 / (1.0 + np.exp(A * p_model + B))
+    y_pred = (cal_probs >= 0.5).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y, y_pred).ravel()
+    total = len(y)
+    return {
+        "tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn),
+        "accuracy":  round(float((tp + tn) / total), 4),
+        "precision": round(float(precision_score(y, y_pred, zero_division=0)), 4),
+        "recall":    round(float(recall_score(y, y_pred, zero_division=0)), 4),
+        "f1":        round(float(f1_score(y, y_pred, zero_division=0)), 4),
+        "total": total,
+        "threshold": 0.5,
+        "note": "Computed on training set (no graph regularisation) at threshold 0.50",
+    }
 
 @app.get("/v1/student/psychometric-questions")
 async def get_psychometric_questions():

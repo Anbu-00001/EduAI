@@ -910,7 +910,7 @@ function ResultPanel({ result, reset, profile, reassess }: ResultPanelProps) {
           className="w-full bg-gradient-to-r from-indigo-500/10 to-blue-500/10 border border-indigo-500/20 rounded-2xl p-5"
         >
           <div className="flex items-start gap-3">
-            <div className="text-2xl">⚡</div>
+            <Zap size={20} className="text-indigo-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="text-sm font-semibold text-indigo-300 mb-1">Your Gen Z Advantage</p>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">

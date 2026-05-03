@@ -129,7 +129,7 @@ export default function SkillRoadmap({ actions, currentTier, field }: SkillRoadm
       {cumLift > 0 && currentTier !== 'GREEN' && (
         <div className="mt-4 p-3 bg-green-dim border border-green/20 rounded-xl">
           <p className="text-xs text-green-text">
-            ✓ Following all steps could improve your probability by ~{(cumLift * 100).toFixed(0)}% — potentially reaching GREEN tier.
+            Following all steps could improve your probability by ~{(cumLift * 100).toFixed(0)}% — potentially reaching GREEN tier.
           </p>
           <p className="text-[10px] text-slate-500 mt-1">Stop when GREEN · Results may vary by market conditions.</p>
         </div>

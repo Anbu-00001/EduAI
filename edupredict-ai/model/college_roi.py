@@ -190,7 +190,7 @@ def score_college(
         f"₹{loan_amount_inr/1e5:.1f}L loan for a college with "
         f"{placement_rate:.0%} placement rate and ~₹{median_salary/1e5:.1f}L avg salary. "
         f"EMI will be {emi_to_salary:.0%} of Year-1 salary. "
-        f"{'⚠️ DEBT TRAP RISK: More than 50% of salary to EMI.' if debt_trap else ''}"
+        f"{'DEBT TRAP RISK: More than 50% of salary to EMI.' if debt_trap else ''}"
     )
     
     return CollegeROIScore(

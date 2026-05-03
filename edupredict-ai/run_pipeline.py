@@ -46,12 +46,12 @@ def main():
     with open(cache_path) as f:
         cache = json.load(f)
         assert len(cache["records"]) >= 1, "demand_cache.json records empty"
-        print("✅ Step 1: DAG complete")
+        print("[OK] Step 1: DAG complete")
 
     if args.retrain:
         # Step 2: Snapshot
         run_cmd("python3 data/pipeline/save_snapshot.py")
-        print("✅ Step 2: Snapshot complete")
+        print("[OK] Step 2: Snapshot complete")
 
         # Step 3: Feature Engineering (Phase 5: Indian Datasets)
         run_cmd("python3 model/feature_engineering.py")
@@ -59,7 +59,7 @@ def main():
         import pandas as pd
         df = pd.read_csv(features_path)
         assert df.shape[1] >= 14, f"Features CSV too narrow for Phase 5: {df.shape[1]} cols (expected 14+)"
-        print("✅ Step 3: Feature engineering complete")
+        print("[OK] Step 3: Feature engineering complete")
 
         # Step 4: Retrain with Temporal & Integrity
         run_cmd("python3 model/retrain_with_temporal.py")
@@ -67,7 +67,7 @@ def main():
         with open(metrics_path) as f:
             metrics = json.load(f)
             assert metrics["graph_regularised_auc"] >= 0.70, f"AUC too low for production: {metrics['graph_regularised_auc']}"
-            print("✅ Step 4: Retraining & Integrity Hash complete")
+            print("[OK] Step 4: Retraining & Integrity Hash complete")
 
     # Step 5: Docker Restart (or manual if docker not available)
     print("\n> Attempting to restart API container...")
@@ -81,11 +81,11 @@ def main():
     try:
         r = requests.get("http://localhost:8000/v1/health", timeout=5)
         if r.status_code == 200:
-            print(f"✅ Step 5: API verified at v{r.json().get('version')}")
+            print(f"[OK] Step 5: API verified at v{r.json().get('version')}")
         else:
-            print(f"⚠️ API health check failed: {r.text}")
+            print(f"[WARN] API health check failed: {r.text}")
     except Exception as e:
-        print(f"⚠️ Could not reach API for final health check: {e}")
+        print(f"[WARN] Could not reach API for final health check: {e}")
 
     print("\n══════════════════════════════════════")
     print("PHASE 5 DEPLOYMENT COMPLETE")

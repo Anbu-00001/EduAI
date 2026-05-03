@@ -39,7 +39,7 @@ RANDOM_STATE_SPLIT_1 = 42
 RANDOM_STATE_SPLIT_2 = 99
 
 def retrain():
-    logger.info("🚀 Starting Phase 4: Production Grade Retraining Pipeline...")
+    logger.info("Starting Phase 4: Production Grade Retraining Pipeline...")
     EnvConfig.PROD_ARTIFACTS_DIR().mkdir(parents=True, exist_ok=True)
     
     # 1. Load and Augment Data
@@ -209,7 +209,7 @@ def retrain():
             f"Predictive Parity diff still failing: {fair_metrics_post.predictive_parity_diff}"
             
     except Exception as e:
-        logger.error(f"❌ Fairness calibration failed: {e}")
+        logger.error(f"Fairness calibration failed: {e}")
         # In production hardening, we might want to fail the build here
         # raise e 
 
@@ -261,7 +261,7 @@ def retrain():
     # 12. Integrity
     generate_artifact_hashes(ARTIFACTS_DIR)
     
-    logger.info("✅ Phase 4 Retraining Complete")
+    logger.info("Phase 4 Retraining Complete")
     for k, v in metrics.items():
         logger.info(f"  {k}: {v}")
 
