@@ -167,6 +167,16 @@ def test_phase_5_bug_fixes():
 
     # Bug 6: safe_load_artifact integrity
     from model.data_builder import safe_load_artifact
-    with pytest.raises(RuntimeError):
-        # Pass a wrong hash
-        safe_load_artifact("model/artifacts/scaler.pkl", {"scaler.pkl": "wrong_hash"})
+    import tempfile, pickle, os
+    from pathlib import Path
+    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+        pickle.dump({"dummy": "data"}, tmp)
+        tmp_name = tmp.name
+    
+    try:
+        with pytest.raises(RuntimeError):
+            # Pass a wrong hash
+            safe_load_artifact(tmp_name, {Path(tmp_name).name: "wrong_hash"})
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
