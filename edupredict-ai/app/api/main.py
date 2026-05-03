@@ -524,6 +524,25 @@ async def trigger_data_refresh(
     return {"status": "refresh_scheduled", "message": "Data refresh started in background. Updates in ~5 minutes."}
 
 
+class AdminLoginRequest(BaseModel):
+    api_key: str
+
+@app.post("/v1/auth/admin-login")
+@limiter.limit("10/minute")
+async def admin_login(request: Request, req: AdminLoginRequest):
+    from app.api.auth import hash_api_key, create_jwt_token
+    key_hash = hash_api_key(req.api_key)
+    async with request.app.state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND active = true",
+            key_hash
+        )
+    if not row or row["tenant_id"] != "admin":
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+    token = create_jwt_token("admin")
+    return {"access_token": token, "token_type": "bearer"}
+
+
 class StudentSessionRequest(BaseModel):
     user_hash: str
 

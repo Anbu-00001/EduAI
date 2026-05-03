@@ -42,6 +42,7 @@ export default function LandingPage() {
 
   const [adminKey, setAdminKey] = useState('')
   const [adminKeyError, setAdminKeyError] = useState('')
+  const [adminLoading, setAdminLoading] = useState(false)
 
   const handleLenderSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -53,14 +54,23 @@ export default function LandingPage() {
     navigate('/lender')
   }
 
-  const handleAdminSubmit = (e: React.FormEvent) => {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!adminKey.trim()) {
       setAdminKeyError('Admin key is required')
       return
     }
-    sessionStorage.setItem('ep_api_key', adminKey.trim())
-    navigate('/admin')
+    setAdminLoading(true)
+    setAdminKeyError('')
+    try {
+      const res = await apiClient.post('/auth/admin-login', { api_key: adminKey.trim() })
+      sessionStorage.setItem('ep_jwt', res.data.access_token)
+      navigate('/admin')
+    } catch {
+      setAdminKeyError('Invalid admin key')
+    } finally {
+      setAdminLoading(false)
+    }
   }
 
   const handleStudentDemo = () => navigate('/student')
@@ -210,12 +220,12 @@ export default function LandingPage() {
                 type="password"
                 value={adminKey}
                 onChange={e => { setAdminKey(e.target.value); setAdminKeyError('') }}
-                placeholder="Admin API Key (ep_admin_...)"
+                placeholder="Admin API Key (ep_admin_2026)"
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
               />
               {adminKeyError && <p className="text-xs text-rose-400">{adminKeyError}</p>}
-              <button type="submit" className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600/20 border border-violet-500/30 hover:bg-violet-600/30 font-bold text-sm text-violet-300 transition-all">
-                Open Console <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              <button type="submit" disabled={adminLoading} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600/20 border border-violet-500/30 hover:bg-violet-600/30 font-bold text-sm text-violet-300 transition-all disabled:opacity-60">
+                {adminLoading ? 'Verifying...' : 'Open Console'} <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
             </form>
           </div>
