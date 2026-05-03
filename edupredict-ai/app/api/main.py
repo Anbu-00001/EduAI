@@ -1288,6 +1288,200 @@ async def get_admin_recent_assessments(request: Request, limit: int = 100, tenan
             res.append(d)
         return res
 
+@app.get("/v1/student/psychometric-questions")
+async def get_psychometric_questions():
+    """Return the 5 psychometric questions — no auth required."""
+    from model.psychometric import PSYCHOMETRIC_QUESTIONS
+    return {
+        "questions": [
+            {
+                "id": q.id,
+                "question": q.question,
+                "category": q.category,
+                "options": [
+                    {"label": o.label, "text": o.text, "score": o.score}
+                    for o in q.options
+                ],
+            }
+            for q in PSYCHOMETRIC_QUESTIONS
+        ]
+    }
+
+
+class PsychometricRequest(BaseModel):
+    answers: List[float]
+    base_probability: float = Field(..., ge=0.0, le=1.0)
+
+
+@app.post("/v1/student/psychometric")
+async def submit_psychometric(
+    req: PsychometricRequest,
+    tenant: dict = Depends(get_current_tenant),
+):
+    """
+    Score 5 psychometric answers and return a post-hoc calibration adjustment.
+    Adjustment is in [-0.05, +0.05] and is added to calibrated_probability.
+    Does NOT modify the frozen ML feature vector.
+    """
+    from model.psychometric import score_psychometric
+    result = score_psychometric(req.answers)
+    adjusted_prob = max(0.0, min(1.0, req.base_probability + result.adjustment))
+    return {
+        "raw_score": result.raw_score,
+        "normalized_score": result.normalized_score,
+        "adjustment": result.adjustment,
+        "adjusted_probability": round(adjusted_prob, 4),
+        "profile_type": result.profile_type,
+        "insight": result.insight,
+    }
+
+
+class LoanScenariosRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cgpa: float = Field(..., ge=0.0, le=10.0)
+    internships_count: int = Field(..., ge=0, le=10)
+    backlogs: int = Field(..., ge=0, le=20)
+    field_of_study: str
+    college_placement_rate: float = Field(..., ge=0.0, le=100.0)
+    loan_amount_inr: float = Field(..., ge=10000.0, le=5_000_000.0)
+    annual_family_income_inr: Optional[float] = Field(None, ge=0)
+    user_hash: Optional[str] = None
+
+    @field_validator("field_of_study")
+    @classmethod
+    def validate_field(cls, v):
+        from config import FIELD_QUERIES
+        valid = list(FIELD_QUERIES.keys())
+        if v not in valid:
+            raise ValueError(f"field_of_study must be one of {valid}")
+        return v
+
+
+@app.post("/v1/student/loan-scenarios")
+async def student_loan_scenarios(
+    req: LoanScenariosRequest,
+    request: Request,
+    tenant: dict = Depends(get_current_tenant),
+):
+    """
+    Return 3 loan-amount scenarios (50%, 75%, 100% of requested amount).
+    ML repayment probability is identical across amounts — loan_amount is not in the
+    frozen 14-feature vector.  Differentiation comes from EMI, DTI, and affordability tier.
+    """
+    demand_lookup, velocity_lookup, market_hhi = {}, {}, 0.14
+    try:
+        cache = json.load(open(EnvConfig.DATA_DIR() / "pipeline" / "demand_cache.json"))
+        demand_lookup = {r["field"]: r["job_count_normalized"] for r in cache["records"]}
+        from model.temporal_features import compute_demand_velocity, compute_hhi
+        vel_df = compute_demand_velocity()
+        velocity_lookup = {
+            r["field"]: {
+                "velocity": r["demand_velocity_per_day"],
+                "accel": r["demand_acceleration"],
+                "r2": r["velocity_r_squared"],
+                "estimated": r["estimated"],
+            }
+            for r in vel_df.to_dict(orient="records")
+        }
+        market_hhi = compute_hhi(pd.DataFrame(cache["records"]))
+    except Exception as e:
+        logger.warning(f"loan_scenarios: temporal context unavailable: {e}")
+
+    macro_index = compute_macro_index(breaker=request.app.state.breakers["datagov"])
+    feature_names = app.state.metrics.get("feature_cols_v3", [
+        "cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized",
+        "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day",
+        "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi",
+        "macro_index", "backlogs_missing",
+    ])
+    temporal_data = velocity_lookup.get(req.field_of_study, {})
+    temporal = TemporalFeatures(
+        velocity=temporal_data.get("velocity", 0.0),
+        accel=temporal_data.get("accel", 0.0),
+        r2=temporal_data.get("r2", 0.0),
+        estimated=temporal_data.get("estimated", True),
+    )
+    market = MarketFeatures(
+        demand_proxy=demand_lookup.get(req.field_of_study, 0.5),
+        market_hhi=market_hhi,
+        macro_index=macro_index,
+    )
+    features = FeaturePipeline.transform(
+        cgpa=req.cgpa,
+        internships_count=req.internships_count,
+        backlogs=req.backlogs,
+        field_of_study=req.field_of_study,
+        college_placement_rate=req.college_placement_rate,
+        salary_norm=get_nirf_salary_norm(req.field_of_study),
+        temporal=temporal,
+        market=market,
+        backlogs_missing=0,
+    )
+    features_sc = app.state.scaler.transform(pd.DataFrame([features], columns=feature_names))
+
+    base_models = app.state.base_models
+    xp = np.mean([m.predict_proba(features_sc)[:, 1] for m in base_models["xgb"]], axis=0)
+    lp = np.mean([m.predict(features_sc) for m in base_models["lgb"]], axis=0)
+    cp = np.mean([m.predict_proba(features_sc)[:, 1] for m in base_models["cat"]], axis=0)
+    p_model = float(app.state.meta_model.predict_proba(np.column_stack([xp, lp, cp]))[0, 1])
+    p_cohort = float(build_peer_cohort_graph(app.state.X_train, app.state.y_train, features_sc)[0])
+    p_blended = app.state.graph_params["alpha"] * p_model + (1 - app.state.graph_params["alpha"]) * p_cohort
+
+    cal_params = app.state.calibration
+    if cal_params.get("method") == "isotonic":
+        bins = np.array(cal_params["bins"])
+        lookup_arr = np.array(cal_params["lookup"])
+        idx = max(0, min(np.searchsorted(bins, p_blended, side="right") - 1, len(lookup_arr) - 1))
+        cal_prob = float(lookup_arr[idx])
+    else:
+        cal_prob = float(1 / (1 + np.exp(cal_params.get("A", 1.0) * p_blended + cal_params.get("B", 0.0))))
+
+    amounts = [req.loan_amount_inr * 0.50, req.loan_amount_inr * 0.75, req.loan_amount_inr]
+    scenarios = []
+    for amount in amounts:
+        emi = amount * 0.01349  # 10.5% p.a., 10yr (120mo) tenure
+        income = req.annual_family_income_inr
+        dti = (emi * 12) / income if income and income > 0 else None
+
+        if dti is None:
+            aff_tier = "AMBER"
+            verdict = f"EMI INR {emi:,.0f}/mo — add family income for DTI analysis"
+        elif dti < 0.20:
+            aff_tier = "GREEN"
+            verdict = f"Comfortable — EMI is {dti:.0%} of annual income"
+        elif dti < 0.35:
+            aff_tier = "AMBER"
+            verdict = f"Manageable — EMI is {dti:.0%} of annual income"
+        else:
+            aff_tier = "RED"
+            verdict = f"Stretched — EMI is {dti:.0%} of annual income, high debt burden"
+
+        scenarios.append({
+            "loan_amount_inr": round(amount),
+            "emi_monthly": round(emi),
+            "dti_ratio": round(dti, 4) if dti is not None else None,
+            "affordability_tier": aff_tier,
+            "repayment_probability": round(cal_prob, 4),
+            "verdict": verdict,
+        })
+
+    recommended = next(
+        (s["loan_amount_inr"] for s in reversed(scenarios) if s["affordability_tier"] != "RED"),
+        scenarios[0]["loan_amount_inr"],
+    )
+
+    return {
+        "scenarios": scenarios,
+        "recommended_amount": recommended,
+        "base_probability": round(cal_prob, 4),
+        "note": (
+            "ML repayment probability is identical across loan amounts — the model assesses your "
+            "academic and market profile, not the loan size. Tier differences reflect debt-to-income "
+            "burden only."
+        ),
+    }
+
+
 # SPA / Static Serving (Catch-all)
 # This MUST be last to avoid shadowing API routes
 app.mount("/assets", StaticFiles(directory="app/api/static/assets"), name="assets")

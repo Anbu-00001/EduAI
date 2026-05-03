@@ -56,7 +56,7 @@ export default function FreshnessPanel() {
 
       {refreshDone && (
         <p className="text-xs text-green-text mb-3 bg-green-dim px-3 py-2 rounded-lg">
-          ✓ Refresh scheduled — data updates in ~5 minutes
+          Refresh scheduled — data updates in ~5 minutes
         </p>
       )}
 

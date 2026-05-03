@@ -56,7 +56,7 @@ export default function MetricsStrip({ data, isLoading }: MetricsStripProps) {
   const aucDelta = auc != null ? `+${(auc - 0.62).toFixed(3)} vs CIBIL` : undefined
   const aucColor = auc != null && auc >= 0.78 ? 'text-green-text' : 'text-amber-text'
   const eceColor = ece != null && ece < 0.03 ? 'text-green-text' : 'text-rose-text'
-  const eceSubtitle = ece != null ? (ece < 0.03 ? '<0.03 target ✓' : 'Above 0.03 target ⚠') : '—'
+  const eceSubtitle = ece != null ? (ece < 0.03 ? '<0.03 target (pass)' : 'Above 0.03 target (review)') : '—'
   const dpiFair = dpi != null && dpi >= 0.8
 
   return (
@@ -78,7 +78,7 @@ export default function MetricsStrip({ data, isLoading }: MetricsStripProps) {
       <MetricCard
         label="Fairness DPI"
         value={dpi != null ? dpi.toFixed(3) : '—'}
-        subtitle={dpiFair ? '✓ Fair (≥0.80)' : '⚠ Review Required'}
+        subtitle={dpiFair ? 'Fair (≥0.80)' : 'Review Required'}
         icon={AlertTriangle}
         valueColor={dpiFair ? 'text-green-text' : 'text-rose-text'}
       />

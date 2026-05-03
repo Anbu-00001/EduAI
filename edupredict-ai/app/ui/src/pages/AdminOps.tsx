@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Brain, Server, Shield, ChevronRight, Loader2 } from 'lucide-react'
+import { Activity, Brain, Server, Shield, ChevronRight, Loader2, BarChart2 } from 'lucide-react'
 import { apiClient } from '@/api/client'
 import { LineChart, Line, ResponsiveContainer } from 'recharts'
 import { formatINR, titleCase } from '@/lib/utils'
@@ -45,6 +45,15 @@ export default function AdminOps() {
       return res.data
     },
     refetchInterval: 30000
+  })
+
+  const { data: cmData } = useQuery({
+    queryKey: ['confusionMatrix'],
+    queryFn: async () => {
+      const res = await apiClient.get('/admin/confusion-matrix')
+      return res.data as { tp: number; fp: number; tn: number; fn: number; accuracy: number; precision: number; recall: number; f1: number; total: number; threshold: number; note: string }
+    },
+    staleTime: 5 * 60 * 1000,
   })
 
   // Bug Fix 4: real polling for retrain logs via GET /admin/retrain/logs/{run_id}
@@ -157,22 +166,22 @@ export default function AdminOps() {
                   <tr>
                     <td className="py-3 text-slate-300">Equalized Odds FPR diff</td>
                     <td className="py-3 text-slate-500">≤ 0.10</td>
-                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.fpr_diff?.toFixed(3) || '0.087'}</td>
-                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.fpr_diff || 0.087, 0.10, false)}</td>
+                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.fpr_diff?.toFixed(3) ?? '0.1111'}</td>
+                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.fpr_diff ?? 0.1111, 0.10, false)}</td>
                     <td className="py-3 text-slate-500">Today</td>
                   </tr>
                   <tr>
                     <td className="py-3 text-slate-300">Equalized Odds TPR diff</td>
                     <td className="py-3 text-slate-500">≤ 0.10</td>
-                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.tpr_diff?.toFixed(3) || '0.034'}</td>
-                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.tpr_diff || 0.034, 0.10, false)}</td>
+                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.tpr_diff?.toFixed(3) ?? '0.0380'}</td>
+                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.tpr_diff ?? 0.0380, 0.10, false)}</td>
                     <td className="py-3 text-slate-500">Today</td>
                   </tr>
                   <tr>
                     <td className="py-3 text-slate-300">Predictive Parity diff</td>
                     <td className="py-3 text-slate-500">≤ 0.10</td>
-                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.predictive_parity_diff?.toFixed(3) ?? '0.021'}</td>
-                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.predictive_parity_diff ?? 0.021, 0.10, false)}</td>
+                    <td className="py-3 text-slate-300">{publicMetrics?.fairness?.predictive_parity_diff?.toFixed(3) ?? '0.1459'}</td>
+                    <td className="py-3">{renderStatus(publicMetrics?.fairness?.predictive_parity_diff ?? 0.1459, 0.10, false)}</td>
                     <td className="py-3 text-slate-500">Today</td>
                   </tr>
                   <tr>
@@ -204,9 +213,9 @@ export default function AdminOps() {
               <div className="grid grid-cols-2 gap-4 font-mono text-[10px]">
                 <div className="bg-bg rounded p-2 border border-border">threshold_disadvantaged: <span className="text-white">0.42</span></div>
                 <div className="bg-bg rounded p-2 border border-border">threshold_advantaged: <span className="text-white">0.51</span></div>
-                <div className="col-span-2 flex gap-4 text-emerald-400/80">
-                  <span>Validation FPR diff post-calibration: 0.087 ✓</span>
-                  <span>Validation TPR diff post-calibration: 0.034 ✓</span>
+                <div className="col-span-2 flex gap-4 text-slate-400 text-[10px]">
+                  <span>FPR diff post-calibration: {publicMetrics?.fairness?.fpr_diff?.toFixed(4) ?? '0.1111'} {(publicMetrics?.fairness?.fpr_diff ?? 0.1111) <= 0.10 ? <span className="text-emerald-400">(pass)</span> : <span className="text-rose-400">(fail)</span>}</span>
+                  <span>TPR diff post-calibration: {publicMetrics?.fairness?.tpr_diff?.toFixed(4) ?? '0.0380'} {(publicMetrics?.fairness?.tpr_diff ?? 0.0380) <= 0.10 ? <span className="text-emerald-400">(pass)</span> : <span className="text-rose-400">(fail)</span>}</span>
                 </div>
               </div>
             </div>
@@ -270,10 +279,10 @@ export default function AdminOps() {
                         <p className="text-[10px] text-indigo-300">Fetching logs...</p>
                       )}
                       {retrainStatus === 'SUCCESS' && (
-                        <p className="text-[10px] text-emerald-400 mt-2">✓ Retrain completed successfully.</p>
+                        <p className="text-[10px] text-emerald-400 mt-2">Retrain completed successfully.</p>
                       )}
                       {retrainStatus === 'FAILURE' && (
-                        <p className="text-[10px] text-rose-400 mt-2">✗ Retrain failed. Check logs above.</p>
+                        <p className="text-[10px] text-rose-400 mt-2">Retrain failed. Check logs above.</p>
                       )}
                     </div>
                   )}
@@ -283,7 +292,66 @@ export default function AdminOps() {
           </div>
         </div>
 
-        {/* ROW 3: Recent Assessments */}
+        {/* ROW 3: Confusion Matrix */}
+        <div className="bg-card border border-border rounded-3xl p-6">
+          <h2 className="text-sm font-bold text-slate-200 mb-6 flex items-center gap-2">
+            <BarChart2 className="w-4 h-4 text-violet-400" /> Training-Set Confusion Matrix (threshold = 0.50)
+          </h2>
+          {cmData ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Matrix grid */}
+              <div>
+                <div className="grid grid-cols-3 gap-1 text-[11px] font-mono max-w-[320px]">
+                  <div />
+                  <div className="text-center text-slate-500 pb-1">Pred: REPAY</div>
+                  <div className="text-center text-slate-500 pb-1">Pred: DEFAULT</div>
+                  <div className="text-slate-500 text-right pr-2 flex items-center justify-end">Actual: REPAY</div>
+                  <div className="bg-emerald-500/20 border border-emerald-500/40 rounded-lg p-3 text-center">
+                    <p className="text-emerald-400 text-xl font-bold">{cmData.tp}</p>
+                    <p className="text-emerald-500/70 text-[10px] mt-0.5">TP</p>
+                  </div>
+                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-center">
+                    <p className="text-rose-400 text-xl font-bold">{cmData.fn}</p>
+                    <p className="text-rose-500/70 text-[10px] mt-0.5">FN</p>
+                  </div>
+                  <div className="text-slate-500 text-right pr-2 flex items-center justify-end">Actual: DEFAULT</div>
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-center">
+                    <p className="text-amber-400 text-xl font-bold">{cmData.fp}</p>
+                    <p className="text-amber-500/70 text-[10px] mt-0.5">FP</p>
+                  </div>
+                  <div className="bg-emerald-500/20 border border-emerald-500/40 rounded-lg p-3 text-center">
+                    <p className="text-emerald-400 text-xl font-bold">{cmData.tn}</p>
+                    <p className="text-emerald-500/70 text-[10px] mt-0.5">TN</p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-3">{cmData.note}</p>
+              </div>
+              {/* Derived metrics */}
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Accuracy',  value: (cmData.accuracy  * 100).toFixed(1) + '%', color: cmData.accuracy  >= 0.80 ? 'text-emerald-400' : 'text-amber-400' },
+                  { label: 'Precision', value: (cmData.precision * 100).toFixed(1) + '%', color: cmData.precision >= 0.80 ? 'text-emerald-400' : 'text-amber-400' },
+                  { label: 'Recall',    value: (cmData.recall    * 100).toFixed(1) + '%', color: cmData.recall    >= 0.80 ? 'text-emerald-400' : 'text-amber-400' },
+                  { label: 'F1 Score',  value: cmData.f1.toFixed(4),                      color: cmData.f1        >= 0.80 ? 'text-emerald-400' : 'text-amber-400' },
+                ].map(m => (
+                  <div key={m.label} className="bg-bg border border-border rounded-xl p-3">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">{m.label}</p>
+                    <p className={`text-2xl font-mono font-bold ${m.color}`}>{m.value}</p>
+                  </div>
+                ))}
+                <div className="col-span-2 bg-bg border border-border rounded-xl p-3 text-[11px] text-slate-400">
+                  N = {cmData.total.toLocaleString('en-IN')} training samples · Chouldechova impossibility: equalized odds and predictive parity cannot both hold.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-20 flex items-center justify-center text-slate-500 text-sm">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading confusion matrix...
+            </div>
+          )}
+        </div>
+
+        {/* ROW 4: Recent Assessments */}
         <div className="bg-card border border-border rounded-3xl p-6">
           <h2 className="text-sm font-bold text-slate-200 mb-6 flex items-center gap-2">
             <Activity className="w-4 h-4 text-blue-400" /> Recent Assessments (All Tenants)

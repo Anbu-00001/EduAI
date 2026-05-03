@@ -1,7 +1,7 @@
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2, ChevronLeft, CheckCircle2, PieChart as PieChartIcon, FileCheck, Activity, Clock, TrendingUp, X, AlertCircle } from 'lucide-react'
+import { Loader2, ChevronLeft, CheckCircle2, PieChart as PieChartIcon, FileCheck, Activity, Clock, TrendingUp, X, AlertCircle, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer } from 'recharts'
@@ -215,7 +215,7 @@ export default function LenderDashboard() {
                 {/* SHAP Waterfall (35%) */}
                 <div className="w-full lg:w-[35%] bg-card border border-border rounded-3xl p-6">
                   <ErrorBoundary label="SHAP Waterfall">
-                    <ShapWaterfall contributions={result.shap_contributions} actualValues={variables} />
+                    <ShapWaterfall contributions={result.shap_contributions ?? {}} actualValues={variables} />
                   </ErrorBoundary>
                 </div>
 
@@ -242,7 +242,7 @@ export default function LenderDashboard() {
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-500">Institution</p>
-                        <p className="text-sm text-slate-200 font-medium">{variables?.institution_verified ? 'Verified ✓' : 'Self-reported'}</p>
+                        <p className="text-sm text-slate-200 font-medium">{variables?.institution_verified ? 'Verified' : 'Self-reported'}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-slate-500">CGPA</p>
@@ -278,7 +278,7 @@ export default function LenderDashboard() {
                   {/* Bug Fix 3: show placeholder when insufficient data */}
                   {(!cohortData || cohortData?.count < 5 || cohortData?.insufficient_cohort) ? (
                     <div className="flex flex-col items-center justify-center h-24 gap-2">
-                      <span className="text-2xl">🔍</span>
+                      <Search className="w-5 h-5 text-slate-500" />
                       <p className="text-xs text-slate-500 text-center">
                         Fewer than 5 similar profiles in the last 30 days.
                         <br/>Showing model-prior distribution.
@@ -305,9 +305,9 @@ export default function LenderDashboard() {
                       <div className="text-xs text-slate-400">
                         <p className="mb-2">Among <span className="text-white font-medium">{cohortData.count}</span> similar borrowers in the last 30 days:</p>
                         <div className="space-y-1">
-                          <p>✓ <span className="text-emerald-400">{((cohortData.distribution.GREEN) / cohortData.count * 100).toFixed(0)}%</span> approved</p>
-                          <p>⚠ <span className="text-amber-400">{((cohortData.distribution.AMBER) / cohortData.count * 100).toFixed(0)}%</span> reviewed</p>
-                          <p>✗ <span className="text-rose-400">{((cohortData.distribution.RED) / cohortData.count * 100).toFixed(0)}%</span> declined</p>
+                          <p><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" /> <span className="text-emerald-400">{((cohortData.distribution.GREEN) / cohortData.count * 100).toFixed(0)}%</span> approved</p>
+                          <p><span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-1" /> <span className="text-amber-400">{((cohortData.distribution.AMBER) / cohortData.count * 100).toFixed(0)}%</span> reviewed</p>
+                          <p><span className="inline-block w-2 h-2 rounded-full bg-rose-500 mr-1" /> <span className="text-rose-400">{((cohortData.distribution.RED) / cohortData.count * 100).toFixed(0)}%</span> declined</p>
                         </div>
                       </div>
                     </div>
@@ -421,9 +421,9 @@ export default function LenderDashboard() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3 justify-end text-emerald-500/80 cursor-pointer hover:text-emerald-400 transition-colors">
-                  <span>DPDP ✓</span>
-                  <span>RBI FREE-AI ✓</span>
-                  <span>Fairness ✓</span>
+                  <span>DPDP</span>
+                  <span>RBI FREE-AI</span>
+                  <span>Fairness</span>
                 </div>
               </div>
             </motion.div>

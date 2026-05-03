@@ -100,7 +100,7 @@ export async function generateUnderwritingReport(result: AssessmentResponse, var
     
     doc.setFontSize(10)
     doc.setFont('helvetica', 'normal')
-    const sortedShap = Object.entries(result.shap_contributions)
+    const sortedShap = Object.entries(result.shap_contributions ?? {})
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
       .slice(0, 5)
       

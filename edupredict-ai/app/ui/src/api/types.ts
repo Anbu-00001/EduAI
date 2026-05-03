@@ -46,7 +46,7 @@ export interface AssessmentResponse {
   risk_tier:                  'GREEN' | 'AMBER' | 'RED'
   recommendation:             string
   potential_score:            number
-  shap_contributions:         Record<string, number>
+  shap_contributions?:         Record<string, number>
   counterfactual:             Record<string, any> | null
   adverse_action:             AdverseAction | null
   fairness_applied:           boolean
@@ -61,6 +61,44 @@ export interface AdverseAction {
   reasons: Array<{ code: string; reason?: string; feature?: string; impact?: number }>
   notice:  string
   rbi_reference: string
+}
+
+export interface LoanScenario {
+  loan_amount_inr: number
+  emi_monthly: number
+  dti_ratio: number | null
+  affordability_tier: 'GREEN' | 'AMBER' | 'RED'
+  repayment_probability: number
+  verdict: string
+}
+
+export interface LoanScenariosResponse {
+  scenarios: LoanScenario[]
+  recommended_amount: number
+  base_probability: number
+  note: string
+}
+
+export interface PsychometricOption {
+  label: string
+  text: string
+  score: number
+}
+
+export interface PsychometricQuestion {
+  id: number
+  question: string
+  category: string
+  options: PsychometricOption[]
+}
+
+export interface PsychometricResult {
+  raw_score: number
+  normalized_score: number
+  adjustment: number
+  adjusted_probability: number
+  profile_type: string
+  insight: string
 }
 
 export interface FreshnessSource {
