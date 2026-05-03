@@ -2,14 +2,15 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-edupredict-ai/data/raw/
-edupredict-ai/data/processed/
-edupredict-ai/model/artifacts/*.pkl
-edupredict-ai/model/artifacts/shap_*.png
+data/raw/
+data/processed/
+model/artifacts/*.pkl
+model/artifacts/shap_*.png
 merged_cols.txt
 check_output.txt
 .kaggle/
 catboost_info/
+.env
 
 # Logs and databases
 *.log
@@ -20,6 +21,9 @@ catboost_info/
 mlruns/
 
 # Data pipeline cache/history
-edupredict-ai/data/pipeline/history/
-edupredict-ai/data/pipeline/demand_cache.json
-edupredict-ai/data/pipeline/source_stats.json
+data/pipeline/history/
+data/pipeline/demand_cache.json
+data/pipeline/source_stats.json
+
+# Pytest cache
+.pytest_cache/
