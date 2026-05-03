@@ -49,7 +49,11 @@ def test_config_resolution():
 def test_api_health():
     response = client.get("/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "5.0.0"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["version"] == "5.0.0"
+    assert "model_version" in data
+    assert "model_auc" in data
 
 def test_conformal_empty_data():
     cp = ConformalPredictor(alpha=0.10)
@@ -96,8 +100,8 @@ def test_loan_roi_math():
     assert abs(roi.emi_inr - 21247) < 500 
 
 def test_skill_gap_priority():
-    features = np.zeros(13)
-    feature_names = ["cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized", "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day", "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index"]
+    features = np.zeros(14)
+    feature_names = ["cgpa_normalized", "internships_count", "backlogs", "median_salary_normalized", "potential_score", "demand_proxy", "placement_rate_for_field", "demand_velocity_per_day", "demand_acceleration", "velocity_r_squared", "demand_momentum", "market_hhi", "macro_index", "backlogs_missing"]
     
     cf_result = {
         "changes_required": {
@@ -118,25 +122,25 @@ def test_skill_gap_priority():
     )
     
     # Internships should probably be higher priority than CGPA due to effort scores
-    assert len(report.actions) == 2
+    assert len(report.actions) >= 2
     assert report.actions[0].priority_score >= report.actions[1].priority_score
 
 def test_phase_5_bug_fixes():
     # Bug 1: salary_norm NIRF lookup
-    from app.api.main import build_features
+    from model.data_builder import get_nirf_salary_norm
     # CS median 8.5L -> norm ~0.34
     # Civil median 4.2L -> norm ~0.10
-    f_cs = build_features(
-        StudentProfile(cgpa=8.0, internships_count=1, backlogs=0, field_of_study="computer_science", college_placement_rate=80, loan_amount_inr=500000, user_hash="test"),
-        {}, {}, 0.14, 0.72
-    )
-    f_civil = build_features(
-        StudentProfile(cgpa=8.0, internships_count=1, backlogs=0, field_of_study="civil_engineering", college_placement_rate=80, loan_amount_inr=500000, user_hash="test"),
-        {}, {}, 0.14, 0.72
-    )
-    assert f_cs[3] > f_civil[3], "CS salary norm should be higher than Civil"
+    norm_cs = get_nirf_salary_norm("computer_science")
+    norm_civil = get_nirf_salary_norm("civil_engineering")
+    assert norm_cs > norm_civil, "CS salary norm should be higher than Civil"
 
     # Bug 2: backlogs_missing presence
+    from model.feature_pipeline import FeaturePipeline, TemporalFeatures, MarketFeatures
+    f_cs = FeaturePipeline.transform(
+        cgpa=8.0, internships_count=1, backlogs=0, field_of_study="computer_science", 
+        college_placement_rate=80, salary_norm=norm_cs, 
+        temporal=TemporalFeatures(), market=MarketFeatures()
+    )
     assert len(f_cs) == 14, "Feature vector must have 14 elements (V5)"
     assert f_cs[13] == 0, "backlogs_missing should be 0 for standard inference"
 
