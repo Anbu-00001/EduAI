@@ -183,9 +183,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Startup Error: {e}")
 
-    # Start Scheduler
-    app.state.scheduler = create_scheduler()
-    app.state.scheduler.start()
+    # Start Scheduler (disabled on free-tier deployments)
+    if os.environ.get("ENABLE_SCHEDULER", "false").lower() == "true":
+        app.state.scheduler = create_scheduler()
+        app.state.scheduler.start()
+    else:
+        app.state.scheduler = None
+        logger.info("Scheduler disabled (ENABLE_SCHEDULER != true)")
 
     async def update_active_tenants_metric():
         while True:
@@ -204,7 +208,8 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    app.state.scheduler.shutdown()
+    if app.state.scheduler is not None:
+        app.state.scheduler.shutdown()
     if hasattr(app.state, 'active_tenants_task'): app.state.active_tenants_task.cancel()
     await app.state.db_pool.close()
     await app.state.redis.aclose()
@@ -249,9 +254,14 @@ async def metrics():
         media_type=CONTENT_TYPE_LATEST
     )
 
+_raw_origins = EnvConfig.ALLOWED_ORIGINS().split(",")
+_origins = [o.strip() for o in _raw_origins if not o.strip().startswith("https://*.")]
+_origin_regex = r"https://.*\.railway\.app" if any("railway.app" in o for o in _raw_origins) else None
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=EnvConfig.ALLOWED_ORIGINS().split(","),
+    allow_origins=_origins,
+    allow_origin_regex=_origin_regex,
     allow_methods=["*"],
     allow_headers=["*"],
 )
