@@ -238,24 +238,33 @@ def compute_hhi(demand_df: pd.DataFrame) -> float:
     hhi = np.sum(shares**2)
     return float(hhi)
 
-def build_peer_cohort_graph(X_train, y_train, X_query, sigma=None, top_k=50):
-    X_train = np.atleast_2d(X_train)
-    X_query = np.atleast_2d(X_query)
+def build_peer_cohort_graph(X_train, y_train, X_query, sigma=None, top_k=30):
+    """
+    Graph-regularised peer cohort probability.
+
+    RAM budget (Render free tier = 512MB):
+    The transient distance matrix is n_train × n_query × 4 bytes (float32).
+    With cap=2000, a single query costs 2000×1×4 = 8 KB — negligible.
+    Even a batch of 100 queries is only 800 KB.
+    """
+    X_train = np.atleast_2d(X_train).astype(np.float32, copy=False)
+    X_query = np.atleast_2d(X_query).astype(np.float32, copy=False)
+    y_train = np.asarray(y_train, dtype=np.float32)
     n_train = len(X_train)
-    if n_train > 10_000:
-        logger.warning(
-            f"X_train has {n_train} rows — pairwise distance matrix is "
-            f"{n_train}²×8 bytes = {n_train**2 * 8 / 1e9:.2f}GB. "
-            f"Sampling 5000 rows for efficiency."
+    _MAX_COHORT_SAMPLES = int(os.environ.get("COHORT_MAX_SAMPLES", "2000"))
+    if n_train > _MAX_COHORT_SAMPLES:
+        logger.debug(
+            f"Peer cohort: sampling {_MAX_COHORT_SAMPLES} of {n_train} "
+            f"training rows (saves ~{(n_train - _MAX_COHORT_SAMPLES) * len(X_query) * 4 / 1e6:.1f} MB)"
         )
-        idx = np.random.choice(n_train, 5000, replace=False)
+        idx = np.random.choice(n_train, _MAX_COHORT_SAMPLES, replace=False)
         X_train = X_train[idx]
         y_train = y_train[idx]
     
     if sigma is None:
         # Median heuristic
-        idx1 = np.random.choice(len(X_train), min(1000, len(X_train)))
-        idx2 = np.random.choice(len(X_train), min(1000, len(X_train)))
+        idx1 = np.random.choice(len(X_train), min(500, len(X_train)))
+        idx2 = np.random.choice(len(X_train), min(500, len(X_train)))
         dists = np.sum((X_train[idx1] - X_train[idx2])**2, axis=1)
         sigma = np.sqrt(np.median(dists[dists > 0])) if np.any(dists > 0) else 1.0
 

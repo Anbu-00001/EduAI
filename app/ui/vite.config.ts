@@ -21,7 +21,7 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: '../api/static',
+    outDir: process.env.VITE_BUILD_TARGET === 'vercel' ? 'dist' : '../api/static',
     emptyOutDir: true,
     rollupOptions: {
       output: {

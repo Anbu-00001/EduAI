@@ -1,3 +1,7 @@
+# DEPRECATED — project has migrated to Render + Vercel + Neon + Upstash
+# This file is kept for reference only. Do not use for new deployments.
+# See render.yaml and app/ui/vercel.json for current deployment config.
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

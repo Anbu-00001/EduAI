@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: edupredict-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /v1/health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: WORKERS
+        value: "1"
+      - key: ENABLE_SCHEDULER
+        value: "false"
+      - key: SLIM_MODEL
+        value: "true"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: IMRI_DEFAULT
+        value: "0.72"
+      - key: RBI_REPO_RATE
+        value: "0.0625"
+      - key: CPI_EDUCATION
+        value: "0.051"
+      - key: DAG_INTERVAL_HOURS
+        value: "6"
+      - key: DAG_CACHE_MAX_AGE_HOURS
+        value: "12"
+      - key: RATE_LIMIT_DEFAULT_RPM
+        value: "100"
+      - key: MLFLOW_TRACKING_URI
+        value: "sqlite:///mlflow.db"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: DATAGOV_API_KEY
+        sync: false

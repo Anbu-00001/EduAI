@@ -40,8 +40,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LOG_LEVEL=info
 
 WORKDIR /app
-ENV WORKERS=1
-ENV PORT=8000
+ENV WORKERS=1 \
+    PORT=8000 \
+    SLIM_MODEL=true \
+    ENABLE_SCHEDULER=false \
+    LOG_LEVEL=info
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \

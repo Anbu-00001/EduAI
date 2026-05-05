@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Security, 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict
+import gc
 import numpy as np
 import pickle, json, os, uuid, time
 from datetime import datetime
@@ -146,7 +147,21 @@ async def lifespan(app: FastAPI):
     try:
         hashes = json.load(open(base_path / "artifact_hashes.json"))
         app.state.meta_model = safe_load_artifact(base_path / "meta_model.pkl", hashes)
-        app.state.base_models = safe_load_artifact(base_path / "base_models.pkl", hashes)
+        _all_models = safe_load_artifact(base_path / "base_models.pkl", hashes)
+        if os.environ.get("SLIM_MODEL", "false").lower() == "true":
+            app.state.base_models = {
+                "xgb": [_all_models["xgb"][0]],
+                "lgb": [_all_models["lgb"][0]],
+                "cat": [_all_models["cat"][0]],
+            }
+            # Free the full dict — pickle already deserialized everything
+            # into RAM; delete + gc.collect reclaims the discarded folds.
+            del _all_models
+            gc.collect()
+            logger.info("SLIM_MODEL=true: loaded 1 fold per algorithm (3 models total), freed unused folds")
+        else:
+            app.state.base_models = _all_models
+            logger.info(f"Loaded full ensemble: {sum(len(v) for v in _all_models.values())} models total")
         app.state.scaler = safe_load_artifact(base_path / "scaler.pkl", hashes)
         app.state.calibration = json.load(open(base_path / "calibration_params.json"))
         app.state.conformal_qhat = json.load(open(base_path / "conformal_params.json"))["q_hat"]
@@ -154,8 +169,16 @@ async def lifespan(app: FastAPI):
         metrics = json.load(open(base_path / "metrics.json"))
         app.state.metrics = metrics
         app.state.graph_params = json.load(open(base_path / "graph_params.json"))
-        app.state.X_train = np.load(base_path / "X_train_sc.npy")
-        app.state.y_train = np.load(base_path / "y_train.npy")
+        # Memory-mapped loading: the OS pages data in from disk on demand
+        # instead of keeping the full array resident in RAM. float32 halves
+        # memory vs the default float64. Safe because peer-cohort graph only
+        # needs approximate distances.
+        app.state.X_train = np.load(
+            base_path / "X_train_sc.npy", mmap_mode="r"
+        ).astype(np.float32, copy=False)
+        app.state.y_train = np.load(
+            base_path / "y_train.npy", mmap_mode="r"
+        ).astype(np.float32, copy=False)
         
         # Set gauges
         ECE_GAUGE.set(metrics.get("post_calibration_ece", 0))
@@ -187,9 +210,13 @@ async def lifespan(app: FastAPI):
     if os.environ.get("ENABLE_SCHEDULER", "false").lower() == "true":
         app.state.scheduler = create_scheduler()
         app.state.scheduler.start()
+        logger.info("Scheduler started")
     else:
         app.state.scheduler = None
-        logger.info("Scheduler disabled (ENABLE_SCHEDULER != true)")
+        logger.info("Scheduler disabled — set ENABLE_SCHEDULER=true to enable")
+
+    # Poll interval: 300s on free tier (less connection churn), 60s otherwise
+    _metric_poll_interval = 300 if os.environ.get("SLIM_MODEL", "false").lower() == "true" else 60
 
     async def update_active_tenants_metric():
         while True:
@@ -202,13 +229,13 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 pass
             import asyncio
-            await asyncio.sleep(60)
+            await asyncio.sleep(_metric_poll_interval)
     app.state.active_tenants_task = __import__('asyncio').create_task(update_active_tenants_metric())
 
     
     yield
     
-    if app.state.scheduler is not None:
+    if getattr(app.state, "scheduler", None) is not None:
         app.state.scheduler.shutdown()
     if hasattr(app.state, 'active_tenants_task'): app.state.active_tenants_task.cancel()
     await app.state.db_pool.close()
@@ -254,14 +281,22 @@ async def metrics():
         media_type=CONTENT_TYPE_LATEST
     )
 
-_raw_origins = EnvConfig.ALLOWED_ORIGINS().split(",")
-_origins = [o.strip() for o in _raw_origins if not o.strip().startswith("https://*.")]
-_origin_regex = r"https://.*\.railway\.app" if any("railway.app" in o for o in _raw_origins) else None
+_raw_origins = [o.strip() for o in EnvConfig.ALLOWED_ORIGINS().split(",") if o.strip()]
+_exact_origins = [o for o in _raw_origins if not o.startswith("https://*.")]
+_has_vercel = any("vercel.app" in o for o in _raw_origins)
+_has_render = any("onrender.com" in o for o in _raw_origins)
+_regex_parts = []
+if _has_vercel:
+    _regex_parts.append(r"https://.*\.vercel\.app")
+if _has_render:
+    _regex_parts.append(r"https://.*\.onrender\.com")
+_origin_regex = "|".join(_regex_parts) if _regex_parts else None
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=_exact_origins,
     allow_origin_regex=_origin_regex,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
