@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git push *)",
+      "Bash(ls -la /home/anbu/25_class/Sem_4/EduAI/edupredict-ai/ && echo \"---\" && ls /home/anbu/25_class/Sem_4/EduAI/)",
+      "Read(//home/anbu/25_class/Sem_4/EduAI/**)",
+      "Bash(rmdir .github/workflows)",
+      "Bash(rmdir .github)",
+      "Bash(ls -la .github)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/api/main.py'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('config.py'\\).read\\(\\)\\); print\\('config.py OK'\\)\")"
+    ],
+    "additionalDirectories": [
+      "/home/anbu/25_class/Sem_4/EduAI"
+    ]
+  }
+}

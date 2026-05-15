@@ -282,20 +282,10 @@ async def metrics():
     )
 
 _raw_origins = [o.strip() for o in EnvConfig.ALLOWED_ORIGINS().split(",") if o.strip()]
-_exact_origins = [o for o in _raw_origins if not o.startswith("https://*.")]
-_has_vercel = any("vercel.app" in o for o in _raw_origins)
-_has_render = any("onrender.com" in o for o in _raw_origins)
-_regex_parts = []
-if _has_vercel:
-    _regex_parts.append(r"https://.*\.vercel\.app")
-if _has_render:
-    _regex_parts.append(r"https://.*\.onrender\.com")
-_origin_regex = "|".join(_regex_parts) if _regex_parts else None
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_exact_origins,
-    allow_origin_regex=_origin_regex,
+    allow_origins=_raw_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -126,8 +126,8 @@ class EnvConfig:
     # CORS
     ALLOWED_ORIGINS = lambda: EnvConfig.optional(
         "ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,http://localhost:8501,https://*.railway.app",
-        "Comma-separated allowed CORS origins. Add your production domain in prod."
+        "http://localhost:3000,http://localhost:5173,http://localhost:8501",
+        "Comma-separated allowed CORS origins."
     )
 
     # IMRI default when data.gov.in is unreachable
